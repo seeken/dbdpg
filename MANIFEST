@@ -50,6 +50,8 @@ t/07copy.t
 t/08async.t
 t/09arrays.t
 t/10_pg_error_field.t
+t/11pipeline.t
+t/11pipeline_optional.t
 t/12placeholders.t
 t/20savepoints.t
 t/30unicode.t
