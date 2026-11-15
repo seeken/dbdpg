@@ -32,6 +32,9 @@ For information on what has changed for each version, see the Changes files.
 REQUIREMENTS:
 -------------
 
+Build against libpq 14 or newer, including matching pipeline-capable headers.
+The PostgreSQL server requirement below is separate from the client library.
+
 	build, test, and install Perl 5         (at least 5.8.1)
 	build, test, and install the DBI module (at least 1.614)
 	build, test, and install PostgreSQL     (at least 8.0)

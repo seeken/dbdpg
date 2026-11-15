@@ -30,6 +30,7 @@ struct imp_dbh_st {
 
     imp_sth_t *async_sth;      /* current async statement handle */
     AV      *savepoints;       /* list of savepoints */
+    void    *notice_arg;       /* original DBI notice processor context */
     PGconn  *conn;             /* connection structure */
     char    *sqlstate;         /* from the last result */
 
@@ -160,6 +161,8 @@ int dbd_db_login6 (SV * dbh, imp_dbh_t * imp_dbh, char * dbname, char * uid, cha
 
 #define dbd_db_continue_connect pg_db_continue_connect
 int dbd_db_continue_connect(SV *h);
+
+SV *pg_db_pipeline(SV *dbh, AV *handles, AV *syncs);
 
 #define dbd_db_ping  pg_db_ping
 int dbd_db_ping(SV *dbh);

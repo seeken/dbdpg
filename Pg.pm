@@ -24,6 +24,11 @@ use 5.008001;
     our @ISA = qw(Exporter);
 
     use constant {
+        PG_TRANS_IDLE => 0,
+        PG_TRANS_ACTIVE => 1,
+        PG_TRANS_INTRANS => 2,
+        PG_TRANS_INERROR => 3,
+        PG_TRANS_UNKNOWN => 4,
         PG_MIN_SMALLINT => -32768,
         PG_MAX_SMALLINT => 32767,
         PG_MIN_INTEGER  => -2147483648,
@@ -40,6 +45,7 @@ use 5.008001;
 
     our %EXPORT_TAGS =
         (
+         pg_transaction => [qw(PG_TRANS_IDLE PG_TRANS_ACTIVE PG_TRANS_INTRANS PG_TRANS_INERROR PG_TRANS_UNKNOWN)],
          async => [qw($DBDPG_DEFAULT PG_ASYNC PG_OLDQUERY_CANCEL PG_OLDQUERY_WAIT)],
          pg_limits => [qw($DBDPG_DEFAULT
                        PG_MIN_SMALLINT PG_MAX_SMALLINT PG_MIN_INTEGER PG_MAX_INTEGER PG_MAX_BIGINT PG_MIN_BIGINT
@@ -93,7 +99,7 @@ use 5.008001;
         sub new { my $class = shift; return bless {}, $class; }
     }
     our $DBDPG_DEFAULT = DBD::Pg::DefaultValue->new();
-    Exporter::export_ok_tags('pg_types', 'async', 'pg_limits');
+    Exporter::export_ok_tags('pg_types', 'async', 'pg_limits', 'pg_transaction');
     our @EXPORT = qw($DBDPG_DEFAULT PG_ASYNC PG_OLDQUERY_CANCEL PG_OLDQUERY_WAIT PG_BYTEA);
     XSLoader::load(__PACKAGE__, $VERSION);
 
@@ -164,6 +170,8 @@ use 5.008001;
             DBD::Pg::db->install_method('pg_putcopyend');
             DBD::Pg::db->install_method('pg_putcopyend_async');
             DBD::Pg::db->install_method('pg_ping');
+            DBD::Pg::db->install_method('pg_transaction_status');
+            DBD::Pg::db->install_method('pg_pipeline');
             DBD::Pg::db->install_method('pg_putline');
             DBD::Pg::db->install_method('pg_ready');
             DBD::Pg::db->install_method('pg_release');
@@ -464,6 +472,56 @@ use 5.008001;
         my $dbh = shift;
         local $SIG{__WARN__} = sub {} if $dbh->FETCH('PrintError');
         return DBD::Pg::db::_ping($dbh);
+    }
+
+    # Build and bind everything before entering libpq pipeline mode. Ordinary
+    # DBI binding and fetching own encoding, bytea, arrays and type conversion.
+    sub pg_pipeline {
+        my ($dbh, $commands) = @_;
+        require Carp;
+        Carp::croak('pg_pipeline requires a nonempty array of command hashes')
+            unless ref($commands) eq 'ARRAY' && @$commands;
+        return $dbh->set_err(1, "pg_pipeline requires a connected handle", "08003") unless $dbh->FETCH('Active');
+        my (@sths, @sync);
+        my @frame = @$commands;
+        # Match execute's deferred DBI transaction start without an extra wait.
+        if (!$dbh->FETCH('AutoCommit') && $dbh->pg_transaction_status == DBD::Pg::PG_TRANS_IDLE()) {
+            unshift @frame, {sql => $dbh->FETCH('ReadOnly') ? 'BEGIN READ ONLY' : 'BEGIN'};
+        }
+        my $prefix = @frame - @$commands;
+        for my $cmd (@frame) {
+            Carp::croak('invalid pg_pipeline command') unless ref($cmd) eq 'HASH'
+                && defined($cmd->{sql}) && !ref($cmd->{sql}) && index($cmd->{sql}, "\0") < 0
+                && (!exists($cmd->{params}) || ref($cmd->{params}) eq 'ARRAY')
+                && (!exists($cmd->{types}) || ref($cmd->{types}) eq 'ARRAY');
+            my $sth = $dbh->prepare($cmd->{sql}, {pg_server_prepare => 1,
+                pg_prepare_now => 0, pg_switch_prepared => 0, pg_async => 0});
+            return unless $sth;
+            my $params = $cmd->{params} || [];
+            Carp::croak('pg_pipeline parameter count mismatch') unless @$params == $sth->{NUM_OF_PARAMS};
+            for my $i (0 .. $#$params) {
+                return unless $sth->bind_param($i + 1, $params->[$i], ($cmd->{types} || [])->[$i]);
+            }
+            push @sths, $sth;
+            push @sync, $cmd->{sync} ? 1 : 0;
+        }
+        my $results = DBD::Pg::db::_pipeline($dbh, \@sths, \@sync);
+        return $dbh->set_err($dbh->err || 1, $dbh->errstr || 'pipeline transport failed', $dbh->state || '08006')
+            unless $results;
+        my $first_error;
+        for my $i (0 .. $#$results) {
+            my $result = $results->[$i];
+            if (exists $result->{error}) { $first_error ||= $result; next; }
+            my $sth = $sths[$i];
+            $result->{columns} = $sth->{NUM_OF_FIELDS} ? [@{$sth->{NAME}}] : [];
+            $result->{types} = $sth->{NUM_OF_FIELDS} ? [@{$sth->{pg_type}}] : [];
+            $result->{rows} = $sth->{NUM_OF_FIELDS} ? $sth->fetchall_arrayref : [];
+        }
+        # Raise only after draining, exiting pipeline mode and restoring DBI
+        # bookkeeping. With RaiseError off retain all ordered command results.
+        $dbh->set_err(1, $first_error->{error}, $first_error->{state}) if $first_error;
+        splice @$results, 0, $prefix;
+        return $results;
     }
 
     sub pg_type_info {
@@ -2863,6 +2921,66 @@ The value returned indicates the current state:
 
 Additional information on why a handle is not valid can be obtained by using the
 L</pg_ping> method.
+
+=head3 B<pg_transaction_status>
+
+  use DBD::Pg ':pg_transaction';
+  my $status = $dbh->pg_transaction_status;
+
+Returns libpq's cached transaction state without sending a query: PG_TRANS_IDLE
+(0), PG_TRANS_ACTIVE (1), PG_TRANS_INTRANS (2), PG_TRANS_INERROR (3), or
+PG_TRANS_UNKNOWN (4). A disconnected handle returns UNKNOWN. This is not a
+liveness probe: a peer disconnect cannot be discovered until socket I/O occurs.
+
+=head3 B<pg_pipeline>
+
+  my $results = $dbh->pg_pipeline([
+      {sql => 'BEGIN READ ONLY NOT DEFERRABLE'},
+      {sql => 'SELECT ?::integer AS n', params => [42], sync => 1},
+      {sql => 'ROLLBACK'},
+  ]);
+
+Executes a finite frame using unnamed extended-protocol commands, with no
+intermediate result dependency. Requires libpq 14 or newer at build and runtime.
+Every command has C<sql>, optional C<params> (array), optional C<types> (one
+C<bind_param> type argument per parameter), and optional C<sync>. Parameters,
+placeholder parsing and fetched values use the normal DBD::Pg implementation,
+including UTF8 flags, bytea, arrays, booleans and numeric conversion attributes.
+Bindings are completed before any command is dispatched. SQL must contain one
+command, as required by libpq's extended protocol. COPY, DEFAULT/CURRENT bind
+sentinels and inout parameters are unsupported. A COPY result disconnects the
+handle. Existing asynchronous results or COPY operations are refused untouched.
+
+C<sync> establishes an error recovery boundary after that command; the final
+command always has a boundary. A failed command skips later commands through
+the next boundary, including ROLLBACK. Put a boundary before cleanup, as above.
+A sync is not an intermediate wait. libpq 17+ queues non-flushing syncs and
+flushes the complete frame; libpq 14-16 may flush at each boundary. Socket reads
+and writes are serviced together to avoid deadlocking large frames.
+
+Returns an array of command results in input order. Successes have C<status>
+(PGRES_TUPLES_OK or PGRES_COMMAND_OK), C<rows>, C<columns> and C<types> (PostgreSQL
+type names); row results additionally have C<type_oids>. Errors have C<status>,
+C<error> and C<state> (SQLSTATE). Skipped commands have PGRES_PIPELINE_ABORTED.
+With RaiseError off, server errors still return the full result array and set
+the handle's error and original SQLSTATE. With RaiseError on, the first error
+is raised after all results have been drained and pipeline mode exited. No
+transaction is automatically rolled back after a server error: supply cleanup
+or call rollback yourself. Transport/protocol failure disconnects and returns
+undef (or raises). All results are buffered; this is not a streaming API.
+
+A frame covers at most one explicit transaction: COMMIT, END, ABORT, full
+ROLLBACK and PREPARE TRANSACTION must be the final command. Multi-transaction
+frames are rejected before dispatch; use separate calls for those. ROLLBACK TO
+SAVEPOINT may occur within a frame. This keeps DBI's deferred BEGIN semantics
+unambiguous. Notice callbacks run after draining, so a fatal warning cannot
+strand the frame in pipeline mode.
+
+AutoCommit and begin_work keep their usual deferred transaction behavior. An
+AutoCommit-off idle handle queues an implicit BEGIN first (READ ONLY when the
+handle's ReadOnly attribute requests it); its internal result is omitted.
+Ending a begin_work transaction restores AutoCommit. A caller's raw BEGIN is
+recognized, and a frame without transaction control leaves it open.
 
 =head3 B<pg_ping>
 

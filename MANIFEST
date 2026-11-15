@@ -64,3 +64,5 @@ t/lib/App/Info/Request.pm
 t/lib/App/Info/Util.pm
 
 lib/Bundle/DBD/Pg.pm
+
+t/11pipeline.t

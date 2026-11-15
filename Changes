@@ -4,6 +4,12 @@ RT items can be found by using: https://rt.cpan.org/Public/Bug/Display.html?id=X
 Github items can be found by using: https://github.com/bucardo/dbdpg/issues/XXX
 
 
+Development (pipeline branch)
+
+ - Add local pg_transaction_status and ordered pg_pipeline frames with
+   existing DBI parameter binding and result conversion; require libpq 14.
+   [Codex, Claude Opus 5.5]
+
 Version 3.21.2  (released August 26, 2026)
 
  - In the tests, ensure the plan declaration happens after the skip_all calls.
