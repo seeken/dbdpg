@@ -140,6 +140,20 @@ my $lost=$victim->pg_pipeline([{sql=>'SELECT 1'}]);
 ok(!defined($lost),'connection loss returns undef without RaiseError');
 ok(!$victim->{Active},'connection loss closes uncertain handle');
 is($victim->pg_transaction_status,PG_TRANS_UNKNOWN,'lost connection local state is UNKNOWN');
+SKIP: {
+    skip 'POSIX descriptor test', 2 if $^O eq 'MSWin32';
+    my @files;
+    for (1..1050) {
+        open my $fh, '<', '/dev/null' or last;
+        push @files, $fh;
+    }
+    skip 'process descriptor limit is too low', 2 unless @files == 1050;
+    my $high=DBI->connect($ENV{DBI_DSN},$ENV{DBI_USER},$ENV{DBI_PASS},
+        {RaiseError=>1,PrintError=>0,AutoCommit=>1});
+    cmp_ok($high->{pg_socket},'>=',1024,'connection above select descriptor limit');
+    is($high->pg_pipeline([{sql=>'SELECT 23'}])->[0]{rows}[0][0],23,'pipeline services a high descriptor');
+    $high->disconnect;
+}
 $dbh->disconnect;
 is($dbh->pg_transaction_status,PG_TRANS_UNKNOWN,'disconnected status safe');
 done_testing;

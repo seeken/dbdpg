@@ -14,7 +14,7 @@
 #include "Pg.h"
 #include <errno.h>
 #ifndef WIN32
-#include <sys/select.h>
+#include <poll.h>
 #endif
 
 #if defined (_WIN32) && !defined (atoll)
@@ -4053,11 +4053,7 @@ SV *pg_db_pipeline(SV *dbh, AV *handles, AV *syncs)
     answer = sv_2mortal(newRV_noinc((SV *)results));
     old_nonblocking = PQisnonblocking(imp_dbh->conn);
     fd = PQsocket(imp_dbh->conn);
-    if (fd < 0
-#ifndef WIN32
-        || fd >= FD_SETSIZE
-#endif
-        || PQsetnonblocking(imp_dbh->conn, 1) != 0
+    if (fd < 0 || PQsetnonblocking(imp_dbh->conn, 1) != 0
         || !PQenterPipelineMode(imp_dbh->conn)) {
         PQsetnonblocking(imp_dbh->conn, old_nonblocking);
         pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, "Could not enter pipeline mode");
@@ -4166,12 +4162,20 @@ SV *pg_db_pipeline(SV *dbh, AV *handles, AV *syncs)
         flush = PQflush(imp_dbh->conn);
         if (flush < 0) goto transport_failure;
         {
-            fd_set reads, writes;
             int ready;
+#ifdef WIN32
+            fd_set reads, writes;
             FD_ZERO(&reads); FD_ZERO(&writes);
             FD_SET(fd, &reads);
             if (flush) FD_SET(fd, &writes);
             ready = select(fd + 1, &reads, &writes, NULL, NULL);
+#else
+            struct pollfd socket;
+            socket.fd = fd;
+            socket.events = POLLIN | (flush ? POLLOUT : 0);
+            socket.revents = 0;
+            ready = poll(&socket, 1, -1);
+#endif
             if (ready < 0 && errno == EINTR) continue;
             if (ready < 0) goto transport_failure;
         }
