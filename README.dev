@@ -193,6 +193,8 @@ t/03smethod.t - Tests all statement handle methods.
 
 t/04misc.t - Tests tracing, data_sources, $DBDPG_DEFAULT, and txn status changes.
 
+t/04txnstatus.t - Cached transaction status, including asynchronous queries.
+
 t/05leak.t - Memory leak tests.
 
 t/06bytea.t - Tests bytea manipulation.

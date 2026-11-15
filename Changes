@@ -5,6 +5,9 @@ Github items can be found by using: https://github.com/bucardo/dbdpg/issues/XXX
 
 Version 3.22.0  (unreleased)
 
+ - Add pg_transaction_status to read the cached transaction state without a query.
+   [Chris Rohlfs]
+
  - Set async_sth to NULL on early return branches in dbd_st_destroy.
    [Chad Granum]
 

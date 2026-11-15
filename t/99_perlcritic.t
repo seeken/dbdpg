@@ -19,12 +19,12 @@ elsif (!eval { require Perl::Critic; 1 }) {
 elsif ($Perl::Critic::VERSION < 0.23) {
     plan skip_all => 'Perl::Critic must be version 0.23 or higher';
 }
-plan tests => 29;
 
 $ENV{LANG} = 'C';
 opendir my $dir, 't' or die qq{Could not open directory 't': $!\n};
 my @testfiles = map { "t/$_" } grep { /^[\w\d].+\.(t|pl)$/ } readdir $dir;
 closedir $dir or die qq{Could not closedir "$dir": $!\n};
+plan tests => 4 + @testfiles;
 
 ## Check some non-test files
 my $critic = Perl::Critic->new(-severity => 1);

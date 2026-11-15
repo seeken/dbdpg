@@ -1110,6 +1110,14 @@ SV * dbd_db_FETCH_attrib (SV * dbh, imp_dbh_t * imp_dbh, SV * keysv)
             retsv = newSViv((IV)imp_dbh->skip_deallocate);
         break;
 
+    case 21: /* pg_transaction_status */
+
+        if (strEQ("pg_transaction_status", key)) {
+            TRACE_PQTRANSACTIONSTATUS;
+            retsv = newSViv(imp_dbh->conn ? PQtransactionStatus(imp_dbh->conn) : PQTRANS_UNKNOWN);
+        }
+        break;
+
     case 23: /* pg_placeholder_nocolons */
 
         if (strEQ("pg_placeholder_nocolons", key))
@@ -1191,6 +1199,12 @@ int dbd_db_STORE_attrib (SV * dbh, imp_dbh_t * imp_dbh, SV * keysv, SV * valuesv
             imp_dbh->pg_bool_tf = newval!=0 ? DBDPG_TRUE : DBDPG_FALSE;
             retval = 1;
         }
+        break;
+
+    case 21: /* pg_transaction_status is read-only */
+
+        if (strEQ("pg_transaction_status", key))
+            croak("pg_transaction_status is read-only");
         break;
 
     case 13: /* pg_errorlevel */

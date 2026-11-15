@@ -43,6 +43,7 @@ t/02attribs.t
 t/03dbmethod.t
 t/03smethod.t
 t/04misc.t
+t/04txnstatus.t
 t/05leak.t
 t/06bytea.t
 t/07copy.t
