@@ -7,7 +7,13 @@ Github items can be found by using: https://github.com/bucardo/dbdpg/issues/XXX
 Development (pipeline branch)
 
  - Add local pg_transaction_status and ordered pg_pipeline frames with
-   existing DBI parameter binding and result conversion; require libpq 14.
+   existing DBI parameter binding and result conversion. Pipeline support is
+   optional; other features retain the stock libpq minimum.
+   [Codex, Claude Opus 5.5]
+
+ - Add pg_can_pipeline, read-only pg_pipeline_supported and the pg_pipeline
+   handle/connect opt-out. Check the loaded libpq version and resolve optional
+   entry points at runtime; pipeline calls fail clearly when unavailable.
    [Codex, Claude Opus 5.5]
 
 Version 3.21.2  (released August 26, 2026)

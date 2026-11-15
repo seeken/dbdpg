@@ -166,9 +166,9 @@ if ($os =~ /Win32/) {
 }
 
 ## Warn about older versions
-if ($serverversion < 140000) {
+if ($serverversion < 80000) {
     print "\n****************\n";
-    print "WARNING! DBD::Pg requires libpq version 14 or later (pipeline support).\n";
+    print "WARNING! DBD::Pg no longer supports versions less than 8.0.\n";
     print "You must upgrade PostgreSQL to a newer version.\n";
     print "****************\n\n";
     exit 1;
@@ -270,6 +270,10 @@ elsif ($os =~ /Win32/) {
     $msdir =~ s{"$}{/ms"};
     $opts{LIBS}[0] .= " -L$msdir -lsecur32";
 }
+
+# Pipeline entry points are resolved at runtime, so loading an older libpq
+# cannot leave unresolved pipeline symbols in the driver.
+$opts{LIBS}[0] .= ' -ldl' if $Config{libs} =~ /(?:^|\s)-ldl(?:\s|$)/;
 
 if ($Config{dlsrc} =~ /dl_none/) {
     $opts{LINKTYPE} = 'static';

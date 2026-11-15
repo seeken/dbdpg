@@ -15,6 +15,9 @@
 #include <errno.h>
 #ifndef WIN32
 #include <poll.h>
+#if defined(DBDPG_HAS_PIPELINING) || PGLIBVERSION >= 170000
+#include <dlfcn.h>
+#endif
 #endif
 
 #if defined (_WIN32) && !defined (atoll)
@@ -462,6 +465,7 @@ int dbd_db_login6 (SV * dbh, imp_dbh_t * imp_dbh, char * dbname, char * uid, cha
     imp_dbh->expand_array      = DBDPG_TRUE;
     imp_dbh->txn_read_only     = DBDPG_FALSE;
     imp_dbh->pid_number        = getpid();
+    imp_dbh->pipeline_enabled  = DBDPG_TRUE;
     imp_dbh->server_prepare    = DBDPG_TRUE;
     imp_dbh->prepare_number    = 1;
     imp_dbh->switch_prepared   = 2;
@@ -1046,9 +1050,11 @@ SV * dbd_db_FETCH_attrib (SV * dbh, imp_dbh_t * imp_dbh, SV * keysv)
         }
         break;
 
-    case 11: /* pg_INV_READ  pg_protocol  ParamValues */
+    case 11: /* pg_pipeline, pg_INV_READ  pg_protocol  ParamValues */
 
-        if (strEQ("pg_INV_READ", key))
+        if (strEQ("pg_pipeline", key))
+            retsv = boolSV(imp_dbh->pipeline_enabled);
+        else if (strEQ("pg_INV_READ", key))
             retsv = newSViv((IV)INV_READ);
         else if (strEQ("pg_protocol", key))
             retsv = newSViv((IV)imp_dbh->pg_protocol);
@@ -1107,6 +1113,12 @@ SV * dbd_db_FETCH_attrib (SV * dbh, imp_dbh_t * imp_dbh, SV * keysv)
             retsv = newSViv((IV)imp_dbh->switch_prepared);
         else if (strEQ("pg_skip_deallocate", key))
             retsv = newSViv((IV)imp_dbh->skip_deallocate);
+        break;
+
+    case 21: /* pg_pipeline_supported */
+
+        if (strEQ("pg_pipeline_supported", key))
+            retsv = boolSV(pg_pipeline_supported());
         break;
 
     case 23: /* pg_placeholder_nocolons */
@@ -1190,6 +1202,20 @@ int dbd_db_STORE_attrib (SV * dbh, imp_dbh_t * imp_dbh, SV * keysv, SV * valuesv
             imp_dbh->pg_bool_tf = newval!=0 ? DBDPG_TRUE : DBDPG_FALSE;
             retval = 1;
         }
+        break;
+
+    case 11: /* pg_pipeline */
+
+        if (strEQ("pg_pipeline", key)) {
+            imp_dbh->pipeline_enabled = newval ? DBDPG_TRUE : DBDPG_FALSE;
+            retval = 1;
+        }
+        break;
+
+    case 21: /* pg_pipeline_supported is read-only */
+
+        if (strEQ("pg_pipeline_supported", key))
+            croak("pg_pipeline_supported is read-only");
         break;
 
     case 13: /* pg_errorlevel */
@@ -3955,6 +3981,57 @@ long dbd_st_execute (SV * sth, imp_sth_t * imp_sth)
 } /* end of dbd_st_execute */
 
 
+/* Resolve optional libpq symbols from the loaded library, so newer headers
+ * do not create imports which prevent loading an older shared library. */
+#if defined(DBDPG_HAS_PIPELINING) || PGLIBVERSION >= 170000
+static void *pg_libpq_symbol(const char *name)
+{
+#ifdef WIN32
+    HMODULE module;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)PQlibVersion, &module)) return NULL;
+    return (void *)GetProcAddress(module, name);
+#else
+    return dlsym(RTLD_DEFAULT, name);
+#endif
+}
+#endif
+
+/* A stack-local table avoids mutable state shared across Perl threads. */
+#ifdef DBDPG_HAS_PIPELINING
+typedef struct {
+    PGpipelineStatus (*status)(const PGconn *);
+    int (*enter)(PGconn *);
+    int (*exit)(PGconn *);
+    int (*sync)(PGconn *);
+    int (*send_sync)(PGconn *);
+} pg_pipeline_api;
+
+static int pg_pipeline_load(pg_pipeline_api *api)
+{
+    if (PQlibVersion() < 140000) return 0;
+    api->status = (PGpipelineStatus (*)(const PGconn *)) pg_libpq_symbol("PQpipelineStatus");
+    api->enter = (int (*)(PGconn *)) pg_libpq_symbol("PQenterPipelineMode");
+    api->exit = (int (*)(PGconn *)) pg_libpq_symbol("PQexitPipelineMode");
+    api->sync = (int (*)(PGconn *)) pg_libpq_symbol("PQpipelineSync");
+    api->send_sync = PQlibVersion() >= 170000
+        ? (int (*)(PGconn *)) pg_libpq_symbol("PQsendPipelineSync") : NULL;
+    return api->status && api->enter && api->exit && api->sync;
+}
+#endif
+
+int pg_pipeline_supported(void)
+{
+#ifdef DBDPG_HAS_PIPELINING
+    pg_pipeline_api api;
+    return pg_pipeline_load(&api);
+#else
+    return 0;
+#endif
+}
+
+#ifdef DBDPG_HAS_PIPELINING
 /* Read leading SQL keywords only, respecting nested comments. Transaction
  * completion is supported at the end of a frame, so DBI's deferred BEGIN
  * rules never need to guess about commands following a COMMIT/ROLLBACK. */
@@ -4025,9 +4102,15 @@ SV *pg_db_pipeline(SV *dbh, AV *handles, AV *syncs)
     const char *failure = NULL;
     PGTransactionStatusType txn;
 
-    if (!imp_dbh->conn || PQstatus(imp_dbh->conn) != CONNECTION_OK || PQlibVersion() < 140000
+    pg_pipeline_api api;
+
+    if (!pg_pipeline_load(&api))
+        croak("pg_pipeline unsupported: requires pipeline-enabled libpq 14 or newer at build and runtime");
+    if (!imp_dbh->pipeline_enabled)
+        croak("pg_pipeline disabled by pg_pipeline attribute");
+    if (!imp_dbh->conn || PQstatus(imp_dbh->conn) != CONNECTION_OK
         || imp_dbh->async_status || imp_dbh->copystate
-        || PQpipelineStatus(imp_dbh->conn) != PQ_PIPELINE_OFF) {
+        || api.status(imp_dbh->conn) != PQ_PIPELINE_OFF) {
         pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, "pg_pipeline requires a connected, idle handle without COPY or async results");
         return &PL_sv_undef;
     }
@@ -4054,7 +4137,7 @@ SV *pg_db_pipeline(SV *dbh, AV *handles, AV *syncs)
     old_nonblocking = PQisnonblocking(imp_dbh->conn);
     fd = PQsocket(imp_dbh->conn);
     if (fd < 0 || PQsetnonblocking(imp_dbh->conn, 1) != 0
-        || !PQenterPipelineMode(imp_dbh->conn)) {
+        || !api.enter(imp_dbh->conn)) {
         PQsetnonblocking(imp_dbh->conn, old_nonblocking);
         pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, "Could not enter pipeline mode");
         return &PL_sv_undef;
@@ -4089,11 +4172,8 @@ SV *pg_db_pipeline(SV *dbh, AV *handles, AV *syncs)
         strbuf_destroy(sql);
         if (!sent) goto transport_failure;
         if (i == count - 1 || SvTRUE(*av_fetch(syncs, i, 0))) {
-#if PGLIBVERSION >= 170000
-            if (!PQsendPipelineSync(imp_dbh->conn)) goto transport_failure;
-#else
-            if (!PQpipelineSync(imp_dbh->conn)) goto transport_failure;
-#endif
+            if (!(api.send_sync ? api.send_sync(imp_dbh->conn)
+                                : api.sync(imp_dbh->conn))) goto transport_failure;
             sync_count++;
         }
     }
@@ -4182,7 +4262,7 @@ SV *pg_db_pipeline(SV *dbh, AV *handles, AV *syncs)
             if (ready < 0) goto transport_failure;
         }
     }
-    if (received != count || !PQexitPipelineMode(imp_dbh->conn)
+    if (received != count || !api.exit(imp_dbh->conn)
         || PQsetnonblocking(imp_dbh->conn, old_nonblocking) != 0) goto transport_failure;
     PQsetNoticeProcessor(imp_dbh->conn, notice_processor, imp_dbh->notice_arg);
     txn = PQtransactionStatus(imp_dbh->conn);
@@ -4238,6 +4318,15 @@ transport_failure:
     }
 }
 
+
+#else
+SV *pg_db_pipeline(SV *dbh, AV *handles, AV *syncs)
+{
+    dTHX;
+    croak("pg_pipeline unsupported: requires pipeline-enabled libpq 14 or newer at build and runtime");
+    return &PL_sv_undef;
+}
+#endif
 
 /* ================================================================== */
 AV * dbd_st_fetch (SV * sth, imp_sth_t * imp_sth)
@@ -4526,20 +4615,21 @@ static int pg_st_deallocate_statement (pTHX_ SV * sth, imp_sth_t * imp_sth)
     }
 
 #if PGLIBVERSION >= 170000
-
-    if (TRACE5_slow)
-        TRC(DBILOGFP, "%sUsing PQclosePrepared: %s\n", THEADER_slow, imp_sth->prepare_name);
-
-    CLEAR_LAST_RESULT(imp_dbh);
-
-    CLEAR_STH_RESULT(imp_sth);
-
-    TRACE_PQCLOSEPREPARED;
-    imp_dbh->last_result = imp_sth->result = PQclosePrepared(imp_dbh->conn, imp_sth->prepare_name);
-    imp_dbh->result_shared = DBDPG_TRUE;
-
-    status = _sqlstate(aTHX_ imp_dbh, imp_sth->result);
-#else
+    {
+        PGresult *(*close_prepared)(PGconn *, const char *) = PQlibVersion() >= 170000
+            ? (PGresult *(*)(PGconn *, const char *)) pg_libpq_symbol("PQclosePrepared") : NULL;
+        if (close_prepared) {
+            if (TRACE5_slow)
+                TRC(DBILOGFP, "%sUsing PQclosePrepared: %s\n", THEADER_slow, imp_sth->prepare_name);
+            CLEAR_LAST_RESULT(imp_dbh);
+            CLEAR_STH_RESULT(imp_sth);
+            TRACE_PQCLOSEPREPARED;
+            imp_dbh->last_result = imp_sth->result = close_prepared(imp_dbh->conn, imp_sth->prepare_name);
+            imp_dbh->result_shared = DBDPG_TRUE;
+            status = _sqlstate(aTHX_ imp_dbh, imp_sth->result);
+        }
+        else
+#endif
     {
         char *                  stmt;
         New(0, stmt, strlen("DEALLOCATE ") + strlen(imp_sth->prepare_name) + 1, char); /* freed below */
@@ -4551,6 +4641,8 @@ static int pg_st_deallocate_statement (pTHX_ SV * sth, imp_sth_t * imp_sth)
 
         status = _result(aTHX_ imp_dbh, stmt);
         Safefree(stmt);
+    }
+#if PGLIBVERSION >= 170000
     }
 #endif
 

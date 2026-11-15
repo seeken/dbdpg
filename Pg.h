@@ -34,8 +34,9 @@ static int errno;
 
 #include "libpq-fe.h"
 
-#if PGLIBVERSION < 140000 || !defined(LIBPQ_HAS_PIPELINING)
-#error "DBD::Pg requires libpq >= 14 with pipeline support"
+/* Pipeline support is optional; transaction status is always available. */
+#ifdef LIBPQ_HAS_PIPELINING
+#define DBDPG_HAS_PIPELINING 1
 #endif
 
 #ifndef INV_READ

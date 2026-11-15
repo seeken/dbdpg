@@ -172,6 +172,7 @@ use 5.008001;
             DBD::Pg::db->install_method('pg_ping');
             DBD::Pg::db->install_method('pg_transaction_status');
             DBD::Pg::db->install_method('pg_pipeline');
+            DBD::Pg::db->install_method('pg_can_pipeline');
             DBD::Pg::db->install_method('pg_putline');
             DBD::Pg::db->install_method('pg_ready');
             DBD::Pg::db->install_method('pg_release');
@@ -479,6 +480,8 @@ use 5.008001;
     sub pg_pipeline {
         my ($dbh, $commands) = @_;
         require Carp;
+        my $unavailable = DBD::Pg::db::_pipeline_error($dbh);
+        return $dbh->set_err(1, $unavailable, '0A000') if $unavailable;
         Carp::croak('pg_pipeline requires a nonempty array of command hashes')
             unless ref($commands) eq 'ARRAY' && @$commands;
         return $dbh->set_err(1, "pg_pipeline requires a connected handle", "08003") unless $dbh->FETCH('Active');
@@ -2941,7 +2944,39 @@ liveness probe: a peer disconnect cannot be discovered until socket I/O occurs.
   ]);
 
 Executes a finite frame using unnamed extended-protocol commands, with no
-intermediate result dependency. Requires libpq 14 or newer at build and runtime.
+intermediate result dependency. This optional API requires pipeline-capable libpq
+headers (14 or newer) at build time and libpq 14 or newer at runtime. The rest
+of DBD::Pg, including C<pg_transaction_status>, works without pipeline support.
+
+Pipeline mode batches v3 extended-query protocol messages; the server version
+is not a pipeline constraint. No special server support is required (see
+L<https://www.postgresql.org/docs/14/libpq-pipeline-mode.html>). Individual SQL
+commands still need to be supported by the server.
+
+=head3 B<pg_can_pipeline> and pipeline attributes
+
+  if ($dbh->can('pg_can_pipeline') && $dbh->pg_can_pipeline) {
+      my $results = $dbh->pg_pipeline([{sql => 'SELECT 1'}]);
+  }
+
+C<pg_can_pipeline> returns true when pipeline support was compiled in, the
+loaded libpq is at least 14 and supplies the required entry points, and the
+handle's C<pg_pipeline> attribute is enabled. C<pg_pipeline_supported> is a
+read-only attribute reporting the build/runtime capability independently of
+the opt-out. Neither test sends a query or depends on the server version;
+callers must also ensure the handle is connected and suitable for a frame.
+C<can('pg_pipeline')> alone tests API presence, not capability.
+
+The C<pg_pipeline> attribute defaults to true. Set C<< pg_pipeline => 0 >> in
+C<connect>, or C<< $dbh->{pg_pipeline} = 0 >> later, to opt out. Callers choosing
+between pipelined and sequential execution should use C<pg_can_pipeline>.
+Ordinary DBI operations always retain their sequential behavior. An explicit
+C<pg_pipeline> call when unsupported or disabled returns undef and sets SQLSTATE
+0A000 with a clear error (or raises with RaiseError); it sends no commands.
+Setting the attribute to true cannot enable missing libpq support.
+
+=head3 B<pg_pipeline> command and result contract
+
 Every command has C<sql>, optional C<params> (array), optional C<types> (one
 C<bind_param> type argument per parameter), and optional C<sync>. Parameters,
 placeholder parsing and fetched values use the normal DBD::Pg implementation,

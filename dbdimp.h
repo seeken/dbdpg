@@ -24,6 +24,7 @@ struct imp_dbh_st {
     bool    copybinary;        /* whether the copy is in binary format */
     bool    copy_nonblocking;  /* whether PQsetnonblocking was enabled for async COPY */
     int     pg_errorlevel;     /* PQsetErrorVerbosity. Set by user, defaults to 1 */
+    bool    pipeline_enabled;  /* per-handle opt-out, default true */
     bool    server_prepare;    /* do we want to use PQexecPrepared? Can be changed by user */
     int     switch_prepared;   /* how many executes until we switch to PQexecPrepared */
     int     async_status;      /* 0=no async 1=async started -1=async has been cancelled */
@@ -162,6 +163,7 @@ int dbd_db_login6 (SV * dbh, imp_dbh_t * imp_dbh, char * dbname, char * uid, cha
 #define dbd_db_continue_connect pg_db_continue_connect
 int dbd_db_continue_connect(SV *h);
 
+int pg_pipeline_supported(void);
 SV *pg_db_pipeline(SV *dbh, AV *handles, AV *syncs);
 
 #define dbd_db_ping  pg_db_ping
