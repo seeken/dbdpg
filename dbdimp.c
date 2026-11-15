@@ -4190,10 +4190,13 @@ SV *pg_db_pipeline(SV *dbh, AV *handles, AV *syncs)
     }
     /* DBD::Pg's state method reads its own sqlstate buffer, not DBI's
      * set_err argument. Keep the first server error across cleanup results. */
+    CLEAR_LAST_RESULT(imp_dbh);
     for (i = 0; i < count; i++) {
         SV *sth = *av_fetch(handles, i, 0);
         D_imp_sth(sth);
         ExecStatusType status = _sqlstate(aTHX_ imp_dbh, imp_sth->result);
+        imp_dbh->last_result = imp_sth->result;
+        imp_dbh->result_shared = DBDPG_TRUE;
         if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) break;
     }
     for (i = 0; i <= av_len(notices); i++)
@@ -4213,6 +4216,9 @@ transport_failure:
             D_imp_sth(sth);
             if (PQresultStatus(imp_sth->result) == PGRES_FATAL_ERROR) {
                 _sqlstate(aTHX_ imp_dbh, imp_sth->result);
+                CLEAR_LAST_RESULT(imp_dbh);
+                imp_dbh->last_result = imp_sth->result;
+                imp_dbh->result_shared = DBDPG_TRUE;
                 sv_setpv(message, PQresultErrorMessage(imp_sth->result));
                 break;
             }

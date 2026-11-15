@@ -68,12 +68,14 @@ for my $utf8 (-1,0,1) {
     is($res->[2]{status},'PGRES_PIPELINE_ABORTED','commands after error skipped through sync');
     is($res->[3]{status},'PGRES_COMMAND_OK','rollback after sync executes');
     is($dbh->state,'22012','DBI SQLSTATE is first error');
+    is($dbh->pg_error_field('sqlstate'),'22012','first error fields survive cleanup and statement destruction');
     is($dbh->pg_transaction_status,PG_TRANS_IDLE,'error frame cleaned up');
 }
 eval {frame('SELECT 1/0')};
 like($@,qr/division by zero/,'RaiseError reports original error after draining');
 is($dbh->pg_transaction_status,PG_TRANS_IDLE,'RaiseError occurs after cleanup');
 is($dbh->selectrow_array('SELECT 9'),9,'ordinary execution after pipeline error');
+ok(!defined($dbh->pg_error_field('sqlstate')),'later successful execution replaces error fields');
 
 $dbh->begin_work;
 my $r=$dbh->pg_pipeline([{sql=>'SELECT 1'}]);
