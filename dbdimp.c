@@ -4143,9 +4143,11 @@ SV *pg_db_pipeline(SV *dbh, AV *handles, AV *syncs)
                 else if (status == PGRES_FATAL_ERROR || status == PGRES_NONFATAL_ERROR
                          || status == PGRES_PIPELINE_ABORTED || status == PGRES_EMPTY_QUERY) {
                     const char *state = PQresultErrorField(res, PG_DIAG_SQLSTATE);
-                    hv_stores(item, "error", newSVpv(status == PGRES_PIPELINE_ABORTED
+                    SV *error = newSVpv(status == PGRES_PIPELINE_ABORTED
                         ? "Command skipped after pipeline error" : status == PGRES_EMPTY_QUERY
-                            ? "Empty pipeline command" : PQresultErrorMessage(res), 0));
+                            ? "Empty pipeline command" : PQresultErrorMessage(res), 0);
+                    if (imp_dbh->pg_utf8_flag) SvUTF8_on(error);
+                    hv_stores(item, "error", error);
                     hv_stores(item, "state", newSVpv(state ? state : "HY000", 0));
                 }
                 else {

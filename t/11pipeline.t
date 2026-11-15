@@ -60,6 +60,15 @@ for my $utf8 (-1,0,1) {
         is($dbh->pg_transaction_status,PG_TRANS_IDLE,'frame leaves idle');
     }
 }
+for my $mode (-1,0,1) {
+    local $dbh->{RaiseError}=0;
+    $dbh->{pg_enable_utf8}=$mode;
+    $dbh->do('SELECT 1/0');
+    my $expected_flag=utf8::is_utf8($dbh->errstr);
+    my $error_frame=frame('SELECT 1/0');
+    is(utf8::is_utf8($error_frame->[1]{error}),$expected_flag,'per-command error UTF8 flag matches normal execution');
+    is(utf8::is_utf8($dbh->errstr),$expected_flag,'DBI error UTF8 flag matches normal execution');
+}
 {
     local $dbh->{RaiseError}=0;
     my $res=$dbh->pg_pipeline([{sql=>'BEGIN'}, {sql=>'SELECT 1/0'},
