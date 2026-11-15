@@ -61,6 +61,7 @@ SKIP: {
          qr{^CLONE$},
          qr{^driver$},
          qr{^constant$},
+         qr{^PG_TRANS_(?:IDLE|ACTIVE|INTRANS|INERROR|UNKNOWN)$},
          ## Auto-generated from types.c:
          qr{PG_ACLITEM},
          qr{PG_ACLITEMARRAY},

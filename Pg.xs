@@ -256,6 +256,17 @@ INCLUDE: Pg.xsi
 MODULE=DBD::Pg    PACKAGE = DBD::Pg::db
 
 
+int
+pg_transaction_status(dbh)
+    SV *dbh
+    CODE:
+    {
+        D_imp_dbh(dbh);
+        RETVAL = imp_dbh->conn ? PQtransactionStatus(imp_dbh->conn) : PQTRANS_UNKNOWN;
+    }
+    OUTPUT:
+        RETVAL
+
 SV*
 quote(dbh, to_quote_sv, type_sv=Nullsv)
     SV* dbh

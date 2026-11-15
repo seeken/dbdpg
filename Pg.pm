@@ -24,6 +24,11 @@ use 5.008001;
     our @ISA = qw(Exporter);
 
     use constant {
+        PG_TRANS_IDLE => 0,
+        PG_TRANS_ACTIVE => 1,
+        PG_TRANS_INTRANS => 2,
+        PG_TRANS_INERROR => 3,
+        PG_TRANS_UNKNOWN => 4,
         PG_MIN_SMALLINT => -32768,
         PG_MAX_SMALLINT => 32767,
         PG_MIN_INTEGER  => -2147483648,
@@ -40,6 +45,7 @@ use 5.008001;
 
     our %EXPORT_TAGS =
         (
+         pg_transaction => [qw(PG_TRANS_IDLE PG_TRANS_ACTIVE PG_TRANS_INTRANS PG_TRANS_INERROR PG_TRANS_UNKNOWN)],
          async => [qw($DBDPG_DEFAULT PG_ASYNC PG_OLDQUERY_CANCEL PG_OLDQUERY_WAIT)],
          pg_limits => [qw($DBDPG_DEFAULT
                        PG_MIN_SMALLINT PG_MAX_SMALLINT PG_MIN_INTEGER PG_MAX_INTEGER PG_MAX_BIGINT PG_MIN_BIGINT
@@ -93,7 +99,7 @@ use 5.008001;
         sub new { my $class = shift; return bless {}, $class; }
     }
     our $DBDPG_DEFAULT = DBD::Pg::DefaultValue->new();
-    Exporter::export_ok_tags('pg_types', 'async', 'pg_limits');
+    Exporter::export_ok_tags('pg_types', 'async', 'pg_limits', 'pg_transaction');
     our @EXPORT = qw($DBDPG_DEFAULT PG_ASYNC PG_OLDQUERY_CANCEL PG_OLDQUERY_WAIT PG_BYTEA);
     XSLoader::load(__PACKAGE__, $VERSION);
 
@@ -164,6 +170,7 @@ use 5.008001;
             DBD::Pg::db->install_method('pg_putcopyend');
             DBD::Pg::db->install_method('pg_putcopyend_async');
             DBD::Pg::db->install_method('pg_ping');
+            DBD::Pg::db->install_method('pg_transaction_status');
             DBD::Pg::db->install_method('pg_putline');
             DBD::Pg::db->install_method('pg_ready');
             DBD::Pg::db->install_method('pg_release');
@@ -2894,6 +2901,18 @@ The value returned indicates the current state:
 
 Additional information on why a handle is not valid can be obtained by using the
 L</pg_ping> method.
+
+=head3 B<pg_transaction_status>
+
+  use DBD::Pg ':pg_transaction';
+  my $status = $dbh->pg_transaction_status;
+  my $same_status = $dbh->{pg_transaction_status};
+
+Returns libpq's cached transaction state without sending a query: PG_TRANS_IDLE
+(0), PG_TRANS_ACTIVE (1), PG_TRANS_INTRANS (2), PG_TRANS_INERROR (3), or
+PG_TRANS_UNKNOWN (4). A disconnected handle returns UNKNOWN. This is not a
+liveness probe: a peer disconnect cannot be discovered until socket I/O occurs.
+The attribute is read-only and returns the same value as the method.
 
 =head3 B<pg_ping>
 
