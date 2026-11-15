@@ -66,3 +66,4 @@ t/lib/App/Info/Util.pm
 lib/Bundle/DBD/Pg.pm
 
 t/11pipeline.t
+t/12pipeline_optional.t

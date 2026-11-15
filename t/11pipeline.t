@@ -10,6 +10,7 @@ use DBD::Pg qw(:pg_transaction :pg_types);
 require 'dbdpg_test_setup.pl';
 my $dbh = connect_database({AutoCommit => 1});
 plan skip_all => 'Connection to database failed' unless $dbh;
+plan skip_all => 'libpq pipeline support unavailable' unless $dbh->pg_can_pipeline;
 $dbh->{PrintError} = 0;
 $dbh->{RaiseError} = 1;
 $dbh->do("SET client_encoding='UTF8'");
