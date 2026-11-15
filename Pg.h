@@ -34,6 +34,11 @@ static int errno;
 
 #include "libpq-fe.h"
 
+/* Pipeline support is optional; transaction status is always available. */
+#ifdef LIBPQ_HAS_PIPELINING
+#define DBDPG_HAS_PIPELINING 1
+#endif
+
 #ifndef INV_READ
 #define INV_READ 0x00040000
 #endif
@@ -182,5 +187,9 @@ DBISTATE_DECLARE;
 #define TRACE_PQTRANSACTIONSTATUS  TRACE_XX "%sPQtransactionStatus\n",   THEADER_slow)
 #define TRACE_PQUNTRACE            TRACE_XX "%sPQuntrace\n",             THEADER_slow)
 #define TRACE_PQUSER               TRACE_XX "%sPQuser\n",                THEADER_slow)
+
+#define TRACE_PQLIBVERSION         TRACE_XX "%sPQlibVersion\n",          THEADER_slow)
+#define TRACE_PQISNONBLOCKING      TRACE_XX "%sPQisnonblocking\n",       THEADER_slow)
+#define TRACE_PQRESSTATUS          TRACE_XX "%sPQresStatus\n",           THEADER_slow)
 
 /* end of Pg.h */

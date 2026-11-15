@@ -267,6 +267,55 @@ pg_transaction_status(dbh)
     OUTPUT:
         RETVAL
 
+int
+pg_can_pipeline(dbh)
+    SV *dbh
+    CODE:
+    {
+        D_imp_dbh(dbh);
+        RETVAL = imp_dbh->pipeline_enabled && pg_pipeline_supported();
+    }
+    OUTPUT:
+        RETVAL
+
+const char *
+_pipeline_begin(dbh)
+    SV *dbh
+    CODE:
+    {
+        D_imp_dbh(dbh);
+        RETVAL = "";
+        if (imp_dbh->conn && !DBIc_has(imp_dbh, DBIcf_AutoCommit)
+            && PQtransactionStatus(imp_dbh->conn) == PQTRANS_IDLE)
+            RETVAL = imp_dbh->txn_read_only ? "BEGIN READ ONLY" : "BEGIN";
+    }
+    OUTPUT:
+        RETVAL
+
+const char *
+_pipeline_error(dbh)
+    SV *dbh
+    CODE:
+    {
+        D_imp_dbh(dbh);
+        RETVAL = !pg_pipeline_supported()
+            ? "pg_pipeline unsupported: requires pipeline-enabled libpq 14 or newer at build and runtime"
+            : !imp_dbh->pipeline_enabled ? "pg_pipeline disabled by pg_pipeline attribute" : "";
+        if (*RETVAL) strcpy(imp_dbh->sqlstate, "0A000");
+    }
+    OUTPUT:
+        RETVAL
+
+SV *
+_pipeline(dbh, handles, syncs)
+    SV *dbh
+    AV *handles
+    AV *syncs
+    CODE:
+        RETVAL = pg_db_pipeline(dbh, handles, syncs);
+    OUTPUT:
+        RETVAL
+
 SV*
 quote(dbh, to_quote_sv, type_sv=Nullsv)
     SV* dbh

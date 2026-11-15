@@ -32,6 +32,9 @@ For information on what has changed for each version, see the Changes files.
 REQUIREMENTS:
 -------------
 
+Pipeline support is optional and requires libpq 14 or newer at build and
+runtime. Other features retain the requirements below.
+
 	build, test, and install Perl 5         (at least 5.8.1)
 	build, test, and install the DBI module (at least 1.614)
 	build, test, and install PostgreSQL     (at least 8.0)

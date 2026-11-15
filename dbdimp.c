@@ -12,6 +12,17 @@
 
 
 #include "Pg.h"
+#if defined(DBDPG_HAS_PIPELINING) && !defined(WIN32)
+#include <errno.h>
+#include <poll.h>
+#endif
+#if defined(DBDPG_HAS_PIPELINING) || PGLIBVERSION >= 170000
+#ifdef WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+#endif
 
 #if defined (_WIN32) && !defined (atoll)
 #define atoll(X) _atoi64(X)
@@ -450,8 +461,9 @@ int dbd_db_login6 (SV * dbh, imp_dbh_t * imp_dbh, char * dbname, char * uid, cha
     }
 
     /* Call the pg_warn function anytime this connection raises a notice */
+    imp_dbh->notice_arg = (void *)SvRV(dbh);
     TRACE_PQSETNOTICEPROCESSOR;
-    (void)PQsetNoticeProcessor(imp_dbh->conn, pg_warn, (void *)SvRV(dbh));
+    (void)PQsetNoticeProcessor(imp_dbh->conn, pg_warn, imp_dbh->notice_arg);
 
     imp_dbh->pg_enable_utf8  = -1;
 
@@ -463,6 +475,7 @@ int dbd_db_login6 (SV * dbh, imp_dbh_t * imp_dbh, char * dbname, char * uid, cha
     imp_dbh->expand_array      = DBDPG_TRUE;
     imp_dbh->txn_read_only     = DBDPG_FALSE;
     imp_dbh->pid_number        = getpid();
+    imp_dbh->pipeline_enabled  = DBDPG_TRUE;
     imp_dbh->server_prepare    = DBDPG_TRUE;
     imp_dbh->prepare_number    = 1;
     imp_dbh->switch_prepared   = 2;
@@ -1047,9 +1060,11 @@ SV * dbd_db_FETCH_attrib (SV * dbh, imp_dbh_t * imp_dbh, SV * keysv)
         }
         break;
 
-    case 11: /* pg_INV_READ  pg_protocol  ParamValues */
+    case 11: /* pg_pipeline, pg_INV_READ  pg_protocol  ParamValues */
 
-        if (strEQ("pg_INV_READ", key))
+        if (strEQ("pg_pipeline", key))
+            retsv = boolSV(imp_dbh->pipeline_enabled);
+        else if (strEQ("pg_INV_READ", key))
             retsv = newSViv((IV)INV_READ);
         else if (strEQ("pg_protocol", key))
             retsv = newSViv((IV)imp_dbh->pg_protocol);
@@ -1110,9 +1125,11 @@ SV * dbd_db_FETCH_attrib (SV * dbh, imp_dbh_t * imp_dbh, SV * keysv)
             retsv = newSViv((IV)imp_dbh->skip_deallocate);
         break;
 
-    case 21: /* pg_transaction_status */
+    case 21: /* pg_pipeline_supported, pg_transaction_status */
 
-        if (strEQ("pg_transaction_status", key)) {
+        if (strEQ("pg_pipeline_supported", key))
+            retsv = boolSV(pg_pipeline_supported());
+        else if (strEQ("pg_transaction_status", key)) {
             TRACE_PQTRANSACTIONSTATUS;
             retsv = newSViv(imp_dbh->conn ? PQtransactionStatus(imp_dbh->conn) : PQTRANS_UNKNOWN);
         }
@@ -1201,9 +1218,19 @@ int dbd_db_STORE_attrib (SV * dbh, imp_dbh_t * imp_dbh, SV * keysv, SV * valuesv
         }
         break;
 
-    case 21: /* pg_transaction_status is read-only */
+    case 11: /* pg_pipeline */
 
-        if (strEQ("pg_transaction_status", key))
+        if (strEQ("pg_pipeline", key)) {
+            imp_dbh->pipeline_enabled = newval ? DBDPG_TRUE : DBDPG_FALSE;
+            retval = 1;
+        }
+        break;
+
+    case 21: /* read-only pipeline capability and transaction status */
+
+        if (strEQ("pg_pipeline_supported", key))
+            croak("pg_pipeline_supported is read-only");
+        else if (strEQ("pg_transaction_status", key))
             croak("pg_transaction_status is read-only");
         break;
 
@@ -3973,6 +4000,445 @@ long dbd_st_execute (SV * sth, imp_sth_t * imp_sth)
 } /* end of dbd_st_execute */
 
 
+/* Resolve optional libpq symbols from the loaded library, so newer headers
+ * do not create imports which prevent loading an older shared library. */
+#if defined(DBDPG_HAS_PIPELINING) || PGLIBVERSION >= 170000
+static void *pg_libpq_symbol(const char *name)
+{
+#ifdef WIN32
+    HMODULE module;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)PQlibVersion, &module)) return NULL;
+    return (void *)GetProcAddress(module, name);
+#else
+    return dlsym(RTLD_DEFAULT, name);
+#endif
+}
+#endif
+
+/* A stack-local table avoids mutable state shared across Perl threads. */
+#ifdef DBDPG_HAS_PIPELINING
+typedef struct {
+    PGpipelineStatus (*status)(const PGconn *);
+    int (*enter)(PGconn *);
+    int (*exit)(PGconn *);
+    int (*sync)(PGconn *);
+    int (*send_sync)(PGconn *);
+} pg_pipeline_api;
+
+static int pg_pipeline_load(pg_pipeline_api *api)
+{
+    dTHX;
+    int version;
+    TRACE_PQLIBVERSION;
+    version = PQlibVersion();
+    if (version < 140000) return 0;
+    api->status = (PGpipelineStatus (*)(const PGconn *)) pg_libpq_symbol("PQpipelineStatus");
+    api->enter = (int (*)(PGconn *)) pg_libpq_symbol("PQenterPipelineMode");
+    api->exit = (int (*)(PGconn *)) pg_libpq_symbol("PQexitPipelineMode");
+    api->sync = (int (*)(PGconn *)) pg_libpq_symbol("PQpipelineSync");
+    api->send_sync = version >= 170000
+        ? (int (*)(PGconn *)) pg_libpq_symbol("PQsendPipelineSync") : NULL;
+    return api->status && api->enter && api->exit && api->sync;
+}
+#endif
+
+int pg_pipeline_supported(void)
+{
+#ifdef DBDPG_HAS_PIPELINING
+    pg_pipeline_api api;
+    return pg_pipeline_load(&api);
+#else
+    return 0;
+#endif
+}
+
+#ifdef DBDPG_HAS_PIPELINING
+/* Read leading SQL keywords only, respecting nested comments. Transaction
+ * completion is supported at the end of a frame, so DBI's deferred BEGIN
+ * rules never need to guess about commands following a COMMIT/ROLLBACK. */
+static const char *pg_pipeline_word(const char *sql, char *word, size_t size)
+{
+    size_t n = 0;
+    for (;;) {
+        while (*sql && isSPACE(*sql)) sql++;
+        if (sql[0] == '-' && sql[1] == '-') {
+            while (*sql && *sql != '\n') sql++;
+        }
+        else if (sql[0] == '/' && sql[1] == '*') {
+            int depth = 1;
+            sql += 2;
+            while (*sql && depth) {
+                if (sql[0] == '/' && sql[1] == '*') { depth++; sql += 2; }
+                else if (sql[0] == '*' && sql[1] == '/') { depth--; sql += 2; }
+                else sql++;
+            }
+        }
+        else break;
+    }
+    while (isALPHA(*sql)) {
+        if (n + 1 < size) word[n++] = *sql;
+        sql++;
+    }
+    word[n] = '\0';
+    return sql;
+}
+
+static int pg_pipeline_transaction_end(imp_sth_t *imp_sth)
+{
+    char word[32];
+    const char *sql = seg_array_element(imp_sth, 0)->segment;
+    if (!sql) return 0;
+    sql = pg_pipeline_word(sql, word, sizeof(word));
+    if (!strcasecmp(word, "COMMIT") || !strcasecmp(word, "END") || !strcasecmp(word, "ABORT")) return 1;
+    if (!strcasecmp(word, "PREPARE")) {
+        pg_pipeline_word(sql, word, sizeof(word));
+        return !strcasecmp(word, "TRANSACTION");
+    }
+    if (strcasecmp(word, "ROLLBACK")) return 0;
+    sql = pg_pipeline_word(sql, word, sizeof(word));
+    if (!strcasecmp(word, "WORK") || !strcasecmp(word, "TRANSACTION"))
+        pg_pipeline_word(sql, word, sizeof(word));
+    return strcasecmp(word, "TO") != 0;
+}
+
+/* Defer Perl warning callbacks until the socket is completely drained. A
+ * fatal __WARN__ handler must not unwind through libpq with a frame pending. */
+static void pg_pipeline_notice(void *arg, const char *message)
+{
+    dTHX;
+    av_push((AV *)arg, newSVpv(message, 0));
+}
+
+/* Close rather than leave pending protocol state if a Perl allocation or a
+ * callback unwinds through the frame. The save stack also frees the guard. */
+typedef struct {
+    imp_dbh_t *dbh;
+    int active;
+} pg_pipeline_guard;
+
+static void pg_pipeline_cleanup(pTHX_ void *arg)
+{
+    pg_pipeline_guard *guard = (pg_pipeline_guard *)arg;
+    if (guard->active) {
+        TRACE_PQFINISH;
+        PQfinish(guard->dbh->conn);
+        guard->dbh->conn = NULL;
+        guard->dbh->done_begin = DBDPG_FALSE;
+        DBIc_ACTIVE_off(guard->dbh);
+    }
+    Safefree(guard);
+}
+
+/* A bounded, synchronous frame built on libpq's nonblocking pipeline API.
+ * No DBI callback or error dispatch may run while results remain pending. */
+SV *pg_db_pipeline(SV *dbh, AV *handles, AV *syncs)
+{
+    dTHX;
+    D_imp_dbh(dbh);
+    I32 i, count = av_len(handles) + 1, received = 0;
+    int sync_count = 0, synced = 0, flush = 0, old_nonblocking, fd;
+    AV *results, *notices, *statements;
+    SV *answer;
+    PQnoticeProcessor notice_processor;
+    const char *failure = NULL;
+    PGTransactionStatusType txn;
+
+    pg_pipeline_api api;
+    pg_pipeline_guard *guard;
+
+    if (!pg_pipeline_load(&api))
+        croak("pg_pipeline unsupported: requires pipeline-enabled libpq 14 or newer at build and runtime");
+    if (!imp_dbh->pipeline_enabled)
+        croak("pg_pipeline disabled by pg_pipeline attribute");
+    TRACE_PQSTATUS;
+    if (!imp_dbh->conn || PQstatus(imp_dbh->conn) != CONNECTION_OK
+        || imp_dbh->async_status || imp_dbh->copystate
+        || api.status(imp_dbh->conn) != PQ_PIPELINE_OFF) {
+        strcpy(imp_dbh->sqlstate, imp_dbh->conn ? "55000" : "08003");
+        pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, "pg_pipeline requires a connected, idle handle without COPY or async results");
+        return &PL_sv_undef;
+    }
+    if (count < 1 || av_len(syncs) + 1 != count)
+        croak("Invalid pipeline frame");
+    /* Validate all handles before sending anything. The public wrapper creates
+     * fresh statements and uses dbd_bind_ph for all parameter conversion. */
+    for (i = 0; i < count; i++) {
+        SV *sth = *av_fetch(handles, i, 0);
+        D_imp_sth(sth);
+        int p;
+        if (DBIc_PARENT_COM(imp_sth) != (void *)imp_dbh || imp_sth->result
+            || imp_sth->has_default || imp_sth->has_current || imp_sth->use_inout)
+            croak("pg_pipeline requires fresh statements without DEFAULT, CURRENT or inout parameters");
+        if (i != count - 1 && pg_pipeline_transaction_end(imp_sth))
+            croak("Transaction completion must be the final pipeline command");
+        for (p = 0; p < ph_array_count(imp_sth); p++) {
+            if (!ph_array_element(imp_sth, p)->bind_type)
+                croak("Unbound pipeline parameter");
+        }
+    }
+    /* Complete SQL construction and parameter allocations before entering the
+     * mode. Validation must never unwind with commands still pending. */
+    statements = (AV *)sv_2mortal((SV *)newAV());
+    notices = (AV *)sv_2mortal((SV *)newAV());
+    for (i = 0; i < count; i++) {
+        SV *sth = *av_fetch(handles, i, 0);
+        D_imp_sth(sth);
+        int p, s;
+        strbuf_t *sql = strbuf_create(imp_sth->totalsize + 32);
+        /* The parser is shared with normal execute: ?, $n and :name all use
+         * the same segments and placeholder numbering. Never quote values. */
+        for (s = 0; s < seg_array_count(imp_sth); s++) {
+            seg_t *seg = seg_array_element(imp_sth, s);
+            if (seg->segment) strbuf_append_text(sql, seg->segment);
+            if (seg->placeholder) strbuf_append_dollar_placeholder(sql, seg->placeholder);
+        }
+        Newz(0, imp_sth->PQvals, imp_sth->numphs, const char *);
+        Newz(0, imp_sth->PQlens, imp_sth->numphs, int);
+        Newz(0, imp_sth->PQfmts, imp_sth->numphs, int);
+        Newz(0, imp_sth->PQoids, imp_sth->numphs, Oid);
+        for (p = 0; p < ph_array_count(imp_sth); p++) {
+            ph_t *ph = ph_array_element(imp_sth, p);
+            if (ph->valuelen > INT_MAX) {
+                strbuf_destroy(sql);
+                croak("Pipeline parameter exceeds libpq length limit");
+            }
+            imp_sth->PQvals[p] = ph->value;
+            imp_sth->PQlens[p] = (int)ph->valuelen;
+            imp_sth->PQfmts[p] = PG_BYTEA == ph->bind_type->type_id ? 1 : 0;
+            imp_sth->PQoids[p] = ph->defaultval ? 0 : (Oid)ph->bind_type->type_id;
+        }
+        av_push(statements, newSVpv(strbuf_get(sql), 0));
+        strbuf_destroy(sql);
+    }
+    results = newAV();
+    answer = sv_2mortal(newRV_noinc((SV *)results));
+    Newz(0, guard, 1, pg_pipeline_guard);
+    guard->dbh = imp_dbh;
+    ENTER;
+    SAVEDESTRUCTOR_X(pg_pipeline_cleanup, guard);
+    TRACE_PQISNONBLOCKING;
+    old_nonblocking = PQisnonblocking(imp_dbh->conn);
+    TRACE_PQSOCKET;
+    fd = PQsocket(imp_dbh->conn);
+    TRACE_PQSETNONBLOCKING;
+    if (fd < 0 || PQsetnonblocking(imp_dbh->conn, 1) != 0
+        || !api.enter(imp_dbh->conn)) {
+        TRACE_PQSETNONBLOCKING;
+        PQsetnonblocking(imp_dbh->conn, old_nonblocking);
+        LEAVE;
+        strcpy(imp_dbh->sqlstate, "55000");
+        pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, "Could not enter pipeline mode");
+        return &PL_sv_undef;
+    }
+    guard->active = 1;
+    TRACE_PQSETNOTICEPROCESSOR;
+    notice_processor = PQsetNoticeProcessor(imp_dbh->conn, pg_pipeline_notice, (void *)notices);
+    for (i = 0; i < count; i++) {
+        SV *sth = *av_fetch(handles, i, 0);
+        D_imp_sth(sth);
+        int sent;
+        TRACE_PQSENDQUERYPARAMS;
+        sent = PQsendQueryParams(imp_dbh->conn,
+            SvPV_nolen(*av_fetch(statements, i, 0)), imp_sth->numphs,
+            imp_sth->PQoids, imp_sth->PQvals, imp_sth->PQlens, imp_sth->PQfmts, 0);
+        if (!sent) goto transport_failure;
+        if (i == count - 1 || SvTRUE(*av_fetch(syncs, i, 0))) {
+            if (!(api.send_sync ? api.send_sync(imp_dbh->conn)
+                                : api.sync(imp_dbh->conn))) goto transport_failure;
+            sync_count++;
+        }
+    }
+    /* Flush and consume concurrently. In particular, a large parameter frame
+     * cannot deadlock against an earlier large result filling the server's
+     * socket. PQgetResult is called only when PQisBusy says it will not wait. */
+    while (synced < sync_count) {
+        PGresult *res;
+        TRACE_PQCONSUMEINPUT;
+        if (!PQconsumeInput(imp_dbh->conn)) goto transport_failure;
+        TRACE_PQISBUSY;
+        while (synced < sync_count && !PQisBusy(imp_dbh->conn)) {
+            ExecStatusType status;
+            TRACE_PQGETRESULT;
+            res = PQgetResult(imp_dbh->conn);
+            if (!res) {
+                TRACE_PQSTATUS;
+                if (PQstatus(imp_dbh->conn) != CONNECTION_OK) goto transport_failure;
+                /* NULL separates command results, not the entire pipeline. */
+                continue;
+            }
+            TRACE_PQRESULTSTATUS;
+            status = PQresultStatus(res);
+            if (status == PGRES_PIPELINE_SYNC) {
+                synced++;
+                TRACE_PQCLEAR;
+                PQclear(res);
+                continue;
+            }
+            TRACE_PQCLEAR;
+            if (received >= count) { PQclear(res); goto transport_failure; }
+            {
+                SV *sth = *av_fetch(handles, received++, 0);
+                D_imp_sth(sth);
+                HV *item;
+                imp_sth->result = res; /* owned and freed by normal sth destroy */
+                item = (HV *)sv_2mortal((SV *)newHV());
+                TRACE_PQRESSTATUS;
+                hv_stores(item, "status", newSVpv(PQresStatus(status), 0));
+                if (status == PGRES_TUPLES_OK) {
+                    imp_sth->cur_tuple = 0;
+                    TRACE_PQNTUPLES;
+                    imp_sth->rows = PQntuples(res);
+                    TRACE_PQNFIELDS;
+                    DBIc_NUM_FIELDS(imp_sth) = PQnfields(res);
+                    {
+                        int col;
+                        AV *oids = (AV *)sv_2mortal((SV *)newAV());
+                        TRACE_PQNFIELDS; TRACE_PQFTYPE;
+                        for (col = 0; col < PQnfields(res); col++) av_push(oids, newSViv(PQftype(res, col)));
+                        hv_stores(item, "type_oids", newRV_inc((SV *)oids));
+                    }
+                    DBIc_ACTIVE_on(imp_sth);
+                }
+                else if (status == PGRES_COMMAND_OK) {
+                    TRACE_PQCMDTUPLES;
+                    imp_sth->rows = atol(PQcmdTuples(res));
+                    DBIc_NUM_FIELDS(imp_sth) = 0;
+                }
+                else if (status == PGRES_FATAL_ERROR || status == PGRES_NONFATAL_ERROR
+                         || status == PGRES_PIPELINE_ABORTED || status == PGRES_EMPTY_QUERY) {
+                    TRACE_PQRESULTERRORFIELD;
+                    const char *state = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+                    const char *message;
+                    SV *error;
+                    TRACE_PQRESULTERRORMESSAGE;
+                    message = PQresultErrorMessage(res);
+                    error = newSVpv(status == PGRES_PIPELINE_ABORTED
+                        ? "Command skipped after pipeline error" : status == PGRES_EMPTY_QUERY
+                            ? "Empty pipeline command" : message, 0);
+                    if (imp_dbh->pg_utf8_flag) SvUTF8_on(error);
+                    hv_stores(item, "error", error);
+                    hv_stores(item, "state", newSVpv(state ? state : "HY000", 0));
+                }
+                else {
+                    /* COPY cannot be used in pipeline mode. Do not leave a
+                     * caller holding a live connection in an undrainable mode. */
+                    failure = "Unsupported pipeline result (COPY is not supported)";
+                    goto transport_failure;
+                }
+                av_push(results, newRV_inc((SV *)item));
+            }
+        }
+        if (synced == sync_count) break;
+        flush = PQflush(imp_dbh->conn);
+        if (flush < 0) goto transport_failure;
+        {
+            int ready;
+#ifdef WIN32
+            fd_set reads, writes;
+            FD_ZERO(&reads); FD_ZERO(&writes);
+            FD_SET(fd, &reads);
+            if (flush) FD_SET(fd, &writes);
+            ready = select(fd + 1, &reads, &writes, NULL, NULL);
+#else
+            struct pollfd socket;
+            socket.fd = fd;
+            socket.events = POLLIN | (flush ? POLLOUT : 0);
+            socket.revents = 0;
+            ready = poll(&socket, 1, -1);
+#endif
+#ifdef WIN32
+            if (ready < 0 && WSAGetLastError() == WSAEINTR) continue;
+#else
+            if (ready < 0 && errno == EINTR) continue;
+#endif
+            if (ready < 0) goto transport_failure;
+        }
+    }
+    TRACE_PQSETNONBLOCKING;
+    if (received != count || !api.exit(imp_dbh->conn)
+        || PQsetnonblocking(imp_dbh->conn, old_nonblocking) != 0) goto transport_failure;
+    TRACE_PQSETNOTICEPROCESSOR;
+    PQsetNoticeProcessor(imp_dbh->conn, notice_processor, imp_dbh->notice_arg);
+    TRACE_PQTRANSACTIONSTATUS;
+    txn = PQtransactionStatus(imp_dbh->conn);
+    imp_dbh->done_begin = txn == PQTRANS_INTRANS || txn == PQTRANS_INERROR;
+    if (txn == PQTRANS_IDLE) {
+        av_clear(imp_dbh->savepoints);
+        if (DBIc_has(imp_dbh, DBIcf_BegunWork)) {
+            DBIc_set(imp_dbh, DBIcf_AutoCommit, 1);
+            DBIc_set(imp_dbh, DBIcf_BegunWork, 0);
+        }
+    }
+    /* DBD::Pg's state method reads its own sqlstate buffer, not DBI's
+     * set_err argument. Keep the first server error across cleanup results. */
+    CLEAR_LAST_RESULT(imp_dbh);
+    for (i = 0; i < count; i++) {
+        SV *sth = *av_fetch(handles, i, 0);
+        D_imp_sth(sth);
+        PGresult *result = imp_sth->result;
+        ExecStatusType status = set_sqlstate(aTHX_ imp_dbh, result);
+        imp_dbh->last_result = imp_sth->result = result;
+        imp_dbh->result_shared = DBDPG_TRUE;
+        if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
+            if (status == PGRES_EMPTY_QUERY || status == PGRES_PIPELINE_ABORTED)
+                strcpy(imp_dbh->sqlstate, "HY000");
+            break;
+        }
+    }
+    guard->active = 0;
+    LEAVE;
+    for (i = 0; i <= av_len(notices); i++)
+        pg_warn(imp_dbh->notice_arg, SvPV_nolen(*av_fetch(notices, i, 0)));
+    return newSVsv(answer);
+
+transport_failure:
+    {
+        /* No synchronous rollback on a half-sent pipeline. Closing the socket
+         * is the only safe recovery from transport/protocol failure. */
+        TRACE_PQERRORMESSAGE;
+        SV *message = sv_2mortal(newSVpv(failure ? failure : PQerrorMessage(imp_dbh->conn), 0));
+        strncpy(imp_dbh->sqlstate, failure ? "0A000" : "08006", 6);
+        /* A later cleanup transport error must not erase an already received
+         * business error. Its PGresult remains owned by the statement. */
+        for (i = 0; i < received; i++) {
+            SV *sth = *av_fetch(handles, i, 0);
+            D_imp_sth(sth);
+            TRACE_PQRESULTSTATUS;
+            if (PQresultStatus(imp_sth->result) == PGRES_FATAL_ERROR) {
+                PGresult *result = imp_sth->result;
+                set_sqlstate(aTHX_ imp_dbh, result);
+                CLEAR_LAST_RESULT(imp_dbh);
+                imp_dbh->last_result = imp_sth->result = result;
+                imp_dbh->result_shared = DBDPG_TRUE;
+                TRACE_PQRESULTERRORMESSAGE;
+                sv_setpv(message, PQresultErrorMessage(imp_sth->result));
+                break;
+            }
+        }
+        TRACE_PQFINISH;
+        PQfinish(imp_dbh->conn);
+        imp_dbh->conn = NULL;
+        imp_dbh->done_begin = DBDPG_FALSE;
+        DBIc_ACTIVE_off(imp_dbh);
+        guard->active = 0;
+        LEAVE;
+        pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, SvPV_nolen(message));
+        return &PL_sv_undef;
+    }
+}
+
+
+#else
+SV *pg_db_pipeline(SV *dbh, AV *handles, AV *syncs)
+{
+    dTHX;
+    croak("pg_pipeline unsupported: requires pipeline-enabled libpq 14 or newer at build and runtime");
+    return &PL_sv_undef;
+}
+#endif
+
 /* ================================================================== */
 AV * dbd_st_fetch (SV * sth, imp_sth_t * imp_sth)
 {
@@ -4260,20 +4726,23 @@ static int pg_st_deallocate_statement (pTHX_ SV * sth, imp_sth_t * imp_sth)
     }
 
 #if PGLIBVERSION >= 170000
-
-    if (TRACE5_slow)
-        TRC(DBILOGFP, "%sUsing PQclosePrepared: %s\n", THEADER_slow, imp_sth->prepare_name);
-
-    CLEAR_LAST_RESULT(imp_dbh);
-
-    CLEAR_STH_RESULT(imp_sth);
-
-    TRACE_PQCLOSEPREPARED;
-    imp_dbh->last_result = imp_sth->result = PQclosePrepared(imp_dbh->conn, imp_sth->prepare_name);
-    imp_dbh->result_shared = DBDPG_TRUE;
-
-    status = set_sqlstate(aTHX_ imp_dbh, imp_sth->result);
-#else
+    {
+        PGresult *(*close_prepared)(PGconn *, const char *);
+        TRACE_PQLIBVERSION;
+        close_prepared = PQlibVersion() >= 170000
+            ? (PGresult *(*)(PGconn *, const char *)) pg_libpq_symbol("PQclosePrepared") : NULL;
+        if (close_prepared) {
+            if (TRACE5_slow)
+                TRC(DBILOGFP, "%sUsing PQclosePrepared: %s\n", THEADER_slow, imp_sth->prepare_name);
+            CLEAR_LAST_RESULT(imp_dbh);
+            CLEAR_STH_RESULT(imp_sth);
+            TRACE_PQCLOSEPREPARED;
+            imp_dbh->last_result = imp_sth->result = close_prepared(imp_dbh->conn, imp_sth->prepare_name);
+            imp_dbh->result_shared = DBDPG_TRUE;
+            status = set_sqlstate(aTHX_ imp_dbh, imp_sth->result);
+        }
+        else
+#endif
     {
         char *                  stmt;
         New(0, stmt, strlen("DEALLOCATE ") + strlen(imp_sth->prepare_name) + 1, char); /* freed below */
@@ -4285,6 +4754,8 @@ static int pg_st_deallocate_statement (pTHX_ SV * sth, imp_sth_t * imp_sth)
 
         status = run_sql(aTHX_ imp_dbh, stmt);
         Safefree(stmt);
+    }
+#if PGLIBVERSION >= 170000
     }
 #endif
 

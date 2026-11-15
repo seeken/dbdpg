@@ -313,6 +313,10 @@ elsif ($os =~ /Win32/) {
     $opts{LIBS}[0] .= " -L$msdir -lsecur32";
 }
 
+# Pipeline entry points are resolved at runtime, so loading an older libpq
+# cannot leave unresolved pipeline symbols in the driver.
+$opts{LIBS}[0] .= ' -ldl' if $Config{libs} =~ /(?:^|\s)-ldl(?:\s|$)/;
+
 if ($Config{dlsrc} =~ /dl_none/) {
     $opts{LINKTYPE} = 'static';
 }

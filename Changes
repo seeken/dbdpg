@@ -8,6 +8,12 @@ Version 3.22.0  (unreleased)
  - Add pg_transaction_status to read the cached transaction state without a query.
    [Chris Rohlfs]
 
+ - Add optional pg_pipeline frames using normal parameter binding and result
+     conversion, with pg_can_pipeline, pg_pipeline_supported, and a pg_pipeline
+     opt-out.
+   Pipeline support requires libpq 14 or newer at build and runtime.
+   [Chris Rohlfs]
+
  - Set async_sth to NULL on early return branches in dbd_st_destroy.
    [Chad Granum]
 
