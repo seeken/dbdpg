@@ -24,6 +24,18 @@ use 5.008001;
     our @ISA = qw(Exporter);
 
     use constant {
+        PGRES_EMPTY_QUERY => 0,
+        PGRES_COMMAND_OK => 1,
+        PGRES_TUPLES_OK => 2,
+        PGRES_COPY_OUT => 3,
+        PGRES_COPY_IN => 4,
+        PGRES_BAD_RESPONSE => 5,
+        PGRES_NONFATAL_ERROR => 6,
+        PGRES_FATAL_ERROR => 7,
+        PGRES_COPY_BOTH => 8,
+        PGRES_SINGLE_TUPLE => 9,
+        PGRES_PIPELINE_SYNC => 10,
+        PGRES_PIPELINE_ABORTED => 11,
         PG_MIN_SMALLINT => -32768,
         PG_MAX_SMALLINT => 32767,
         PG_MIN_INTEGER  => -2147483648,
@@ -40,6 +52,12 @@ use 5.008001;
 
     our %EXPORT_TAGS =
         (
+         pg_pipeline => [qw(
+            PGRES_EMPTY_QUERY PGRES_COMMAND_OK PGRES_TUPLES_OK
+            PGRES_COPY_OUT PGRES_COPY_IN PGRES_BAD_RESPONSE
+            PGRES_NONFATAL_ERROR PGRES_FATAL_ERROR PGRES_COPY_BOTH
+            PGRES_SINGLE_TUPLE PGRES_PIPELINE_SYNC PGRES_PIPELINE_ABORTED
+         )],
          async => [qw($DBDPG_DEFAULT PG_ASYNC PG_OLDQUERY_CANCEL PG_OLDQUERY_WAIT)],
          pg_limits => [qw($DBDPG_DEFAULT
                        PG_MIN_SMALLINT PG_MAX_SMALLINT PG_MIN_INTEGER PG_MAX_INTEGER PG_MAX_BIGINT PG_MIN_BIGINT
@@ -93,7 +111,7 @@ use 5.008001;
         sub new { my $class = shift; return bless {}, $class; }
     }
     our $DBDPG_DEFAULT = DBD::Pg::DefaultValue->new();
-    Exporter::export_ok_tags('pg_types', 'async', 'pg_limits');
+    Exporter::export_ok_tags('pg_types', 'async', 'pg_limits', 'pg_pipeline');
     our @EXPORT = qw($DBDPG_DEFAULT PG_ASYNC PG_OLDQUERY_CANCEL PG_OLDQUERY_WAIT PG_BYTEA);
     XSLoader::load(__PACKAGE__, $VERSION);
 
@@ -4664,8 +4682,11 @@ The hashref contains:
   cmdtuples - affected row count string (for DML)
   rows      - arrayref of arrayrefs (only present for SELECT results)
 
-Common status values: 1 (COMMAND_OK), 2 (TUPLES_OK), 7 (FATAL_ERROR),
-10 (PIPELINE_SYNC), 11 (PIPELINE_ABORTED).
+Import result status constants with C<use DBD::Pg ':pg_pipeline'>, including
+C<PGRES_COMMAND_OK>, C<PGRES_TUPLES_OK>, C<PGRES_FATAL_ERROR>,
+C<PGRES_PIPELINE_SYNC> and C<PGRES_PIPELINE_ABORTED>. These are result
+statuses, distinct from the C<0>, C<1>, C<2> values of C<pg_pipeline_status>.
+The constants are available even when pipeline mode is not supported by libpq.
 
 In pipeline mode, results arrive in this pattern for each query:
 
@@ -4683,17 +4704,19 @@ libpq's C<PQgetResult> behavior directly and matches how other drivers
 
 Example:
 
+  use DBD::Pg ':pg_pipeline';
+
   $dbh->pg_enter_pipeline_mode();
   $dbh->pg_send_query_params('INSERT INTO t VALUES ($1)', [1]);
   $dbh->pg_send_query_params('SELECT * FROM t', []);
   $dbh->pg_pipeline_sync();
 
-  my $ins = $dbh->pg_getresult();    # {status => 1}
+  my $ins = $dbh->pg_getresult();    # status == PGRES_COMMAND_OK
   $dbh->pg_getresult();              # undef (separator)
-  my $sel = $dbh->pg_getresult();    # {status => 2, rows => [...]}
+  my $sel = $dbh->pg_getresult();    # status == PGRES_TUPLES_OK
   my @rows = @{ $sel->{rows} };
   $dbh->pg_getresult();              # undef (separator)
-  $dbh->pg_getresult();              # {status => 10} (PIPELINE_SYNC)
+  $dbh->pg_getresult();              # status == PGRES_PIPELINE_SYNC
 
   $dbh->pg_exit_pipeline_mode();
 
