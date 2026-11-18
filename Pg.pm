@@ -4646,6 +4646,12 @@ pipeline mode.
 Retrieves the next result from the connection. Returns a hashref or
 C<undef> when no more results are available for the current query.
 
+Rows retain libpq's text representation (including escaped C<bytea>); they
+are not converted using DBI's type decoders. Text values use the same UTF-8
+flag rule as normal fetch: C<pg_utf8_flag> controls it, except for C<bytea>.
+Changing C<client_encoding> via SQL requires refreshing C<pg_enable_utf8>
+to C<-1>, just as with normal DBI calls.
+
 The hashref contains:
 
   status    - integer status code
@@ -4707,6 +4713,13 @@ and dollar placeholders raises an error. C<pg_placeholder_dollaronly> and
 C<pg_placeholder_escaped> on the database handle have their usual meanings;
 for example C<\?>, C<\?|> and C<\?&> preserve JSON operators while removing
 the backslash. These rules also apply to C<pg_send_prepare>.
+SQL and parameters use the same character encoding conversion as normal DBI
+binding, without changing the caller's strings. Parameters use text format:
+for C<bytea>, supply PostgreSQL input syntax (for example C<\x610062> for
+three bytes including NUL). Embedded NUL in a parameter is rejected before
+sending; libpq ignores lengths for text parameters. Raw binary binding and
+binary results are not exposed by this API. The same parameter rules apply
+to C<pg_send_query_prepared>.
 Accepts both C<$1>, C<$2> (libpq native) and C<?> (DBI standard) placeholder
 syntax. When C<?> placeholders are detected, they are automatically converted
 to C<$1>, C<$2>, etc. Returns 1 on success, 0 on error.

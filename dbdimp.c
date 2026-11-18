@@ -5116,7 +5116,10 @@ SV * pg_db_getresult (SV * dbh)
     TRACE_PQRESULTERRORMESSAGE;
     errmsg = PQresultErrorMessage(result);
     if (errmsg && errmsg[0] != '\0') {
-        (void)hv_stores(hv, "error", newSVpv(errmsg, 0));
+        SV *error = newSVpv(errmsg, 0);
+        if (imp_dbh->pg_utf8_flag)
+            SvUTF8_on(error);
+        (void)hv_stores(hv, "error", error);
     }
     else {
         (void)hv_stores(hv, "error", newSVsv(&PL_sv_undef));
@@ -5145,7 +5148,14 @@ SV * pg_db_getresult (SV * dbh)
                     av_push(row, newSVsv(&PL_sv_undef));
                 }
                 else {
-                    av_push(row, newSVpv(PQgetvalue(result, r, c), PQgetlength(result, r, c)));
+                    SV *value;
+                    TRACE_PQGETVALUE;
+                    TRACE_PQGETLENGTH;
+                    value = newSVpvn(PQgetvalue(result, r, c), PQgetlength(result, r, c));
+                    TRACE_PQFTYPE;
+                    if (imp_dbh->pg_utf8_flag && PG_BYTEA != PQftype(result, c))
+                        SvUTF8_on(value);
+                    av_push(row, value);
                 }
             }
             av_push(rows, newRV_noinc((SV*)row));
@@ -5368,8 +5378,41 @@ static SV * pg_convert_placeholders(pTHX_ SV *dbh, PGconn *conn, const char *inp
 } /* end of pg_convert_placeholders */
 
 
+#ifdef DBDPG_HAS_PIPELINE
+/* The low-level API accepts text parameters, including bytea input syntax.
+ * libpq ignores lengths for text, so reject NUL rather than silently truncate. */
+static void pg_pipeline_params(pTHX_ imp_dbh_t *imp_dbh, AV *params, int nparams,
+                              const char ***values, int **lengths)
+{
+    int i;
+    *values = NULL;
+    *lengths = NULL;
+    if (!nparams)
+        return;
+    *values = (const char **)SvPVX(sv_2mortal(newSV(nparams * sizeof(char *))));
+    *lengths = (int *)SvPVX(sv_2mortal(newSV(nparams * sizeof(int))));
+    for (i = 0; i < nparams; i++) {
+        SV **svp = av_fetch(params, i, 0);
+        (*values)[i] = NULL;
+        (*lengths)[i] = 0;
+        if (svp && SvOK(*svp)) {
+            STRLEN len;
+            SV *value = sv_mortalcopy(*svp);
+            value = pg_rightgraded_sv(aTHX_ value, imp_dbh->pg_utf8_flag);
+            (*values)[i] = SvPV(value, len);
+            if (len > INT_MAX)
+                croak("Pipeline text parameter is too long");
+            if (memchr((*values)[i], '\0', len))
+                croak("Pipeline text parameters cannot contain NUL; use escaped bytea text");
+            (*lengths)[i] = (int)len;
+        }
+    }
+}
+#endif
+
+
 /* ================================================================== */
-int pg_db_send_query_params (SV * dbh, char * sql, AV * params)
+int pg_db_send_query_params (SV * dbh, SV * sql, AV * params)
 {
     dTHX;
     D_imp_dbh(dbh);
@@ -5377,35 +5420,24 @@ int pg_db_send_query_params (SV * dbh, char * sql, AV * params)
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_send_query_params\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
-    int nparams, i, ret;
+    int nparams, ret;
     const char ** paramValues = NULL;
-    SV *converted = pg_convert_placeholders(aTHX_ dbh, imp_dbh->conn, sql);
+    int *paramLengths = NULL;
+    SV *converted = pg_convert_placeholders(aTHX_ dbh, imp_dbh->conn,
+        SvPV_nolen(pg_rightgraded_sv(aTHX_ sql, imp_dbh->pg_utf8_flag)));
     const char *real_sql = SvPV_nolen(converted);
 
     nparams = (params) ? (int)(av_len(params) + 1) : 0;
 
-    if (nparams > 0) {
-        Newz(0, paramValues, nparams, const char *);
-        for (i = 0; i < nparams; i++) {
-            SV ** svp = av_fetch(params, i, 0);
-            if (svp && SvOK(*svp)) {
-                paramValues[i] = SvPV_nolen(*svp);
-            }
-            else {
-                paramValues[i] = NULL;
-            }
-        }
-    }
+    pg_pipeline_params(aTHX_ imp_dbh, params, nparams, &paramValues, &paramLengths);
 
     if (!pg_pipeline_begin(aTHX_ dbh, imp_dbh)) {
-        Safefree(paramValues);
         return 0;
     }
     TRACE_PQSENDQUERYPARAMS;
     ret = PQsendQueryParams(imp_dbh->conn, real_sql, nparams, NULL,
-                            paramValues, NULL, NULL, 0);
+                            paramValues, paramLengths, NULL, 0);
 
-    Safefree(paramValues);
 
     if (0 == ret) {
         fatal_sqlstate(aTHX_ imp_dbh);
@@ -5426,7 +5458,7 @@ int pg_db_send_query_params (SV * dbh, char * sql, AV * params)
 
 
 /* ================================================================== */
-int pg_db_send_prepare (SV * dbh, char * name, char * sql)
+int pg_db_send_prepare (SV * dbh, char * name, SV * sql)
 {
     dTHX;
     D_imp_dbh(dbh);
@@ -5436,7 +5468,8 @@ int pg_db_send_prepare (SV * dbh, char * name, char * sql)
 
 #ifdef DBDPG_HAS_PIPELINE
     {
-        SV *converted = pg_convert_placeholders(aTHX_ dbh, imp_dbh->conn, sql);
+        SV *converted = pg_convert_placeholders(aTHX_ dbh, imp_dbh->conn,
+        SvPV_nolen(pg_rightgraded_sv(aTHX_ sql, imp_dbh->pg_utf8_flag)));
         const char *real_sql = SvPV_nolen(converted);
 
         if (!pg_pipeline_begin(aTHX_ dbh, imp_dbh)) {
@@ -5470,30 +5503,18 @@ int pg_db_send_query_prepared (SV * dbh, char * name, AV * params)
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_send_query_prepared\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
-    int nparams, i, ret;
+    int nparams, ret;
     const char ** paramValues = NULL;
+    int *paramLengths = NULL;
     nparams = (params) ? (int)(av_len(params) + 1) : 0;
-    if (nparams > 0) {
-        Newz(0, paramValues, nparams, const char *);
-        for (i = 0; i < nparams; i++) {
-            SV ** svp = av_fetch(params, i, 0);
-            if (svp && SvOK(*svp)) {
-                paramValues[i] = SvPV_nolen(*svp);
-            }
-            else {
-                paramValues[i] = NULL;
-            }
-        }
-    }
+    pg_pipeline_params(aTHX_ imp_dbh, params, nparams, &paramValues, &paramLengths);
 
     if (!pg_pipeline_begin(aTHX_ dbh, imp_dbh)) {
-        Safefree(paramValues);
         return 0;
     }
     TRACE_PQSENDQUERYPREPARED;
     ret = PQsendQueryPrepared(imp_dbh->conn, name, nparams,
-                              paramValues, NULL, NULL, 0);
-    Safefree(paramValues);
+                              paramValues, paramLengths, NULL, 0);
     if (0 == ret) {
         fatal_sqlstate(aTHX_ imp_dbh);
         TRACE_PQERRORMESSAGE;

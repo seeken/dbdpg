@@ -865,7 +865,7 @@ I32
 pg_send_query_params(dbh, sql, ...)
     INPUT:
         SV * dbh
-        char * sql
+        SV * sql
     PREINIT:
         AV * params = NULL;
     CODE:
@@ -881,7 +881,7 @@ pg_send_prepare(dbh, name, sql)
     INPUT:
         SV * dbh
         char * name
-        char * sql
+        SV * sql
     CODE:
         RETVAL = pg_db_send_prepare(dbh, name, sql);
     OUTPUT:

@@ -931,5 +931,80 @@ $dbh->pg_exit_pipeline_mode();
 $dbh->{pg_placeholder_dollaronly} = 0;
 $dbh->do('DEALLOCATE pipeline_json');
 
+# Input conversion and result flags match normal binding and fetch.
+for my $encoding (qw(UTF8 LATIN1)) {
+    $dbh->do("SET client_encoding TO $encoding");
+    $dbh->{pg_enable_utf8} = -1;
+    for my $flag (0, 1) {
+        my $value = "caf\x{e9}";
+        utf8::upgrade($value) if $flag;
+        my $normal = $dbh->selectrow_array('SELECT ?::text', undef, $value);
+        $dbh->pg_enter_pipeline_mode();
+        $dbh->pg_send_query_params('SELECT ?::text', [$value]);
+        $dbh->pg_send_prepare('pipeline_encoding', 'SELECT ?::text');
+        $dbh->pg_send_query_prepared('pipeline_encoding', [$value]);
+        $dbh->pg_pipeline_sync();
+        for my $command (qw(params prepare prepared)) {
+            $result = $dbh->pg_getresult();
+            if ($command ne 'prepare') {
+                is ($result->{rows}[0][0], $normal, "$encoding $flag $command round trip");
+                is (!!utf8::is_utf8($result->{rows}[0][0]), !!utf8::is_utf8($normal),
+                    "$encoding $flag $command result flag");
+            }
+            $dbh->pg_getresult();
+        }
+        $dbh->pg_getresult();
+        $dbh->pg_exit_pipeline_mode();
+        is (!!utf8::is_utf8($value), !!$flag, 'Binding preserves input flag');
+        $dbh->do('DEALLOCATE pipeline_encoding');
+    }
+}
+$dbh->do('SET client_encoding TO UTF8');
+$dbh->{pg_enable_utf8} = -1;
+for my $utf8 (0, 1) {
+    $dbh->{pg_enable_utf8} = $utf8;
+    my $normal = $dbh->selectrow_array(q{SELECT 'plain'::text});
+    $dbh->pg_enter_pipeline_mode();
+    $dbh->pg_send_query_params(q{SELECT 'plain'::text});
+    $dbh->pg_pipeline_sync();
+    $result = $dbh->pg_getresult();
+    is (!!utf8::is_utf8($result->{rows}[0][0]), !!utf8::is_utf8($normal),
+        'Explicit encoding flag matches normal fetch');
+    $dbh->pg_getresult();
+    $dbh->pg_getresult();
+    $dbh->pg_exit_pipeline_mode();
+}
+$dbh->{pg_enable_utf8} = -1;
+my $sql_value = "caf\x{e9}";
+utf8::upgrade($sql_value);
+$dbh->pg_enter_pipeline_mode();
+$dbh->pg_send_query_params("SELECT '$sql_value'::text");
+$dbh->pg_pipeline_sync();
+is ($dbh->pg_getresult()->{rows}[0][0], $sql_value, 'SQL text uses client encoding');
+$dbh->pg_getresult();
+$dbh->pg_getresult();
+$dbh->pg_exit_pipeline_mode();
+
+$dbh->pg_enter_pipeline_mode();
+for my $send (qw(pg_send_query_params pg_send_query_prepared)) {
+    eval { $dbh->$send('SELECT ?::text', ["a\0b"]); };
+    like ($@, qr{cannot contain NUL}, "$send rejects embedded NUL before sending");
+}
+$dbh->pg_send_query_params(q{SELECT $1::bytea}, ['\x610062ff']);
+$dbh->pg_send_prepare('pipeline_bytea', q{SELECT $1::bytea});
+$dbh->pg_send_query_prepared('pipeline_bytea', ['\x610062ff']);
+$dbh->pg_pipeline_sync();
+for my $command (qw(params prepare prepared)) {
+    $result = $dbh->pg_getresult();
+    if ($command ne 'prepare') {
+        is ($result->{rows}[0][0], '\x610062ff', "$command bytea preserves escaped NUL");
+        ok (!utf8::is_utf8($result->{rows}[0][0]), "$command bytea is not flagged");
+    }
+    $dbh->pg_getresult();
+}
+$dbh->pg_getresult();
+$dbh->pg_exit_pipeline_mode();
+$dbh->do('DEALLOCATE pipeline_bytea');
+
 cleanup_database($dbh,'test');
 $dbh->disconnect;
