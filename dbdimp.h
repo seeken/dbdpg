@@ -22,6 +22,12 @@ struct imp_dbh_st {
     int     prepare_number;    /* internal prepared statement name modifier */
     int     copystate;         /* 0=none PGRES_COPY_IN PGRES_COPY_OUT */
     bool    copybinary;        /* whether the copy is in binary format */
+    unsigned long pipeline_sent;     /* commands queued in this pipeline */
+    unsigned long pipeline_received; /* command results received */
+    unsigned long pipeline_flush;    /* last flush request's command count */
+    unsigned long pipeline_syncs;    /* sync results still pending */
+    bool    pipeline_separator;      /* next NULL terminates a command */
+    bool    pipeline_after_sync;     /* allow one final, nonblocking undef */
     int     pipeline_begin;    /* hidden deferred BEGIN result, then separator */
     int     pipeline;          /* 0=off, tracks PQpipelineStatus */
     bool    copy_nonblocking;  /* whether PQsetnonblocking was enabled for async COPY */

@@ -470,6 +470,12 @@ int dbd_db_login6 (SV * dbh, imp_dbh_t * imp_dbh, char * dbname, char * uid, cha
     imp_dbh->copybinary        = DBDPG_FALSE;
     imp_dbh->pipeline          = 0;
     imp_dbh->pipeline_begin    = 0;
+    imp_dbh->pipeline_sent     = 0;
+    imp_dbh->pipeline_received = 0;
+    imp_dbh->pipeline_flush    = 0;
+    imp_dbh->pipeline_syncs    = 0;
+    imp_dbh->pipeline_separator = DBDPG_FALSE;
+    imp_dbh->pipeline_after_sync = DBDPG_FALSE;
     imp_dbh->pg_errorlevel     = 1; /* Default */
     imp_dbh->async_status      = DBH_NO_ASYNC;
     imp_dbh->async_sth         = NULL;
@@ -4932,6 +4938,7 @@ static int pg_pipeline_begin(pTHX_ SV *dbh, imp_dbh_t *imp_dbh)
     }
     imp_dbh->done_begin = DBDPG_TRUE;
     imp_dbh->pipeline_begin = 1;
+    imp_dbh->pipeline_sent++;
     return 1;
 }
 #endif
@@ -5006,6 +5013,9 @@ int pg_db_exit_pipeline_mode (SV * dbh)
     }
     imp_dbh->pipeline = 0;
     imp_dbh->pipeline_begin = 0;
+    imp_dbh->pipeline_sent = imp_dbh->pipeline_received = imp_dbh->pipeline_flush = 0;
+    imp_dbh->pipeline_syncs = 0;
+    imp_dbh->pipeline_separator = imp_dbh->pipeline_after_sync = DBDPG_FALSE;
     TRACE_PQTRANSACTIONSTATUS;
     {
         PGTransactionStatusType txn = PQtransactionStatus(imp_dbh->conn);
@@ -5042,6 +5052,7 @@ int pg_db_pipeline_sync (SV * dbh)
         if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_pipeline_sync (error)\n", THEADER_slow);
         return 0;
     }
+    imp_dbh->pipeline_syncs++;
     if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_pipeline_sync (1)\n", THEADER_slow);
     return 1;
 #else
@@ -5050,6 +5061,49 @@ int pg_db_pipeline_sync (SV * dbh)
 #endif
 
 } /* end of pg_db_pipeline_sync */
+
+
+/* Only read commands covered by a sync or a flush request. A NULL after
+ * a command is still allowed; an empty read after the final sync is local. */
+static PGresult *pg_pipeline_result(pTHX_ SV *dbh, imp_dbh_t *imp_dbh)
+{
+    PGresult *result;
+    if (imp_dbh->pipeline && !imp_dbh->pipeline_syncs &&
+        !imp_dbh->pipeline_separator &&
+        imp_dbh->pipeline_received >= imp_dbh->pipeline_flush) {
+        if (imp_dbh->pipeline_after_sync &&
+            imp_dbh->pipeline_received == imp_dbh->pipeline_sent) {
+            imp_dbh->pipeline_after_sync = DBDPG_FALSE;
+            return NULL;
+        }
+        pg_error(aTHX_ dbh, PGRES_FATAL_ERROR,
+            "pg_getresult requires a pending pipeline sync or flush request");
+        return NULL;
+    }
+    TRACE_PQGETRESULT;
+    result = PQgetResult(imp_dbh->conn);
+#ifdef DBDPG_HAS_PIPELINE
+    if (imp_dbh->pipeline) {
+        if (NULL == result) {
+            imp_dbh->pipeline_separator = DBDPG_FALSE;
+        }
+        else {
+            TRACE_PQRESULTSTATUS;
+            if (PGRES_PIPELINE_SYNC == PQresultStatus(result)) {
+                if (imp_dbh->pipeline_syncs)
+                    imp_dbh->pipeline_syncs--;
+                imp_dbh->pipeline_after_sync = DBDPG_TRUE;
+            }
+            else {
+                imp_dbh->pipeline_received++;
+                imp_dbh->pipeline_separator = DBDPG_TRUE;
+                imp_dbh->pipeline_after_sync = DBDPG_FALSE;
+            }
+        }
+    }
+#endif
+    return result;
+}
 
 
 /* ================================================================== */
@@ -5071,8 +5125,7 @@ SV * pg_db_getresult (SV * dbh)
     /* Hide the deferred BEGIN and its NULL separator, including on error.
      * Report a failed internal command through the normal DBI error path. */
     while (imp_dbh->pipeline_begin) {
-        TRACE_PQGETRESULT;
-        result = PQgetResult(imp_dbh->conn);
+        result = pg_pipeline_result(aTHX_ dbh, imp_dbh);
         if (2 == imp_dbh->pipeline_begin) {
             imp_dbh->pipeline_begin = 0;
             if (NULL == result)
@@ -5099,8 +5152,7 @@ SV * pg_db_getresult (SV * dbh)
         PQclear(result);
     }
 
-    TRACE_PQGETRESULT;
-    result = PQgetResult(imp_dbh->conn);
+    result = pg_pipeline_result(aTHX_ dbh, imp_dbh);
 
     if (NULL == result) {
         if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_getresult (undef)\n", THEADER_slow);
@@ -5470,6 +5522,10 @@ int pg_db_send_query_params (SV * dbh, SV * sql, AV * params)
         return 0;
     }
 
+    if (imp_dbh->pipeline) {
+        imp_dbh->pipeline_sent++;
+        imp_dbh->pipeline_after_sync = DBDPG_FALSE;
+    }
     if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_send_query_params (1)\n", THEADER_slow);
     return 1;
 #else
@@ -5508,6 +5564,10 @@ int pg_db_send_prepare (SV * dbh, char * name, SV * sql)
         if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_send_prepare (error)\n", THEADER_slow);
         return 0;
     }
+    if (imp_dbh->pipeline) {
+        imp_dbh->pipeline_sent++;
+        imp_dbh->pipeline_after_sync = DBDPG_FALSE;
+    }
     if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_send_prepare (1)\n", THEADER_slow);
     return 1;
 #else
@@ -5545,6 +5605,10 @@ int pg_db_send_query_prepared (SV * dbh, char * name, AV * params)
         if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_send_query_prepared (error)\n", THEADER_slow);
         return 0;
     }
+    if (imp_dbh->pipeline) {
+        imp_dbh->pipeline_sent++;
+        imp_dbh->pipeline_after_sync = DBDPG_FALSE;
+    }
     if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_send_query_prepared (1)\n", THEADER_slow);
     return 1;
 #else
@@ -5576,6 +5640,7 @@ int pg_db_send_flush_request (SV * dbh)
         if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_send_flush_request (error)\n", THEADER_slow);
         return 0;
     }
+    imp_dbh->pipeline_flush = imp_dbh->pipeline_sent;
     if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_send_flush_request (1)\n", THEADER_slow);
     return 1;
 #else

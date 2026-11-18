@@ -1044,5 +1044,38 @@ is_deeply ([PGRES_EMPTY_QUERY, PGRES_COMMAND_OK, PGRES_TUPLES_OK,
     PGRES_PIPELINE_SYNC, PGRES_PIPELINE_ABORTED], [0..11],
     'Pipeline export tag supplies result constants');
 
+# Empty reads and commands beyond a flush boundary must not block.
+$dbh->pg_enter_pipeline_mode();
+for my $phase (qw(empty queued)) {
+    $dbh->pg_send_query_params('SELECT 1') if $phase eq 'queued';
+    eval {
+        local $SIG{ALRM} = sub { die "pipeline read timed out\n"; };
+        alarm 3;
+        $dbh->pg_getresult();
+    };
+    alarm 0;
+    like ($@, qr{requires a pending pipeline sync or flush request}, "$phase read rejected");
+}
+$dbh->pg_send_flush_request();
+$dbh->pg_flush();
+$dbh->pg_send_query_params('SELECT 2');
+is ($dbh->pg_getresult()->{status}, PGRES_TUPLES_OK, 'Flush covers first command');
+is ($dbh->pg_getresult(), undef, 'Flush includes first command separator');
+eval {
+    local $SIG{ALRM} = sub { die "pipeline read timed out\n"; };
+    alarm 3;
+    $dbh->pg_getresult();
+};
+alarm 0;
+like ($@, qr{requires a pending pipeline sync or flush request}, 'Flush does not cover later sends');
+$dbh->pg_pipeline_sync();
+is_deeply ($dbh->pg_getresult()->{rows}, [['2']], 'Sync permits remaining command');
+$dbh->pg_getresult();
+is ($dbh->pg_getresult()->{status}, PGRES_PIPELINE_SYNC, 'Guard preserves sync result');
+is ($dbh->pg_getresult(), undef, 'One final empty result after sync');
+eval { $dbh->pg_getresult(); };
+like ($@, qr{requires a pending pipeline sync or flush request}, 'Repeated empty read rejected');
+$dbh->pg_exit_pipeline_mode();
+
 cleanup_database($dbh,'test');
 $dbh->disconnect;

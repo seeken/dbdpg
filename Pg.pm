@@ -4661,7 +4661,15 @@ pipeline mode.
 
 =head3 B<pg_getresult>
 
-Retrieves the next result from the connection. Returns a hashref or
+Retrieves the next result from the connection. In pipeline mode, first send a
+C<pg_pipeline_sync> or C<pg_send_flush_request> covering the commands to read.
+A read without pending synchronized or flushed commands raises a DBI error
+instead of waiting indefinitely. Sending more queries after a flush requires
+another flush request or sync before reading their results. After the last
+sync marker, one optional call returns C<undef> locally; further empty reads
+raise an error. Query separators are always returned normally.
+
+Returns a hashref or
 C<undef> when no more results are available for the current query.
 
 Rows retain libpq's text representation (including escaped C<bytea>); they
