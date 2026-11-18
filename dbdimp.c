@@ -5063,6 +5063,7 @@ SV * pg_db_getresult (SV * dbh)
     SV * retsv;
     int ntuples, nfields;
     const char * errmsg;
+    const char * sqlstate;
     const char * cmdtuples;
 
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_getresult\n", THEADER_slow);
@@ -5124,6 +5125,10 @@ SV * pg_db_getresult (SV * dbh)
     else {
         (void)hv_stores(hv, "error", newSVsv(&PL_sv_undef));
     }
+
+    TRACE_PQRESULTERRORFIELD;
+    sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+    (void)hv_stores(hv, "sqlstate", sqlstate ? newSVpv(sqlstate, 0) : newSVsv(&PL_sv_undef));
 
     TRACE_PQNTUPLES;
     ntuples = PQntuples(result);

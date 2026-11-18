@@ -1019,5 +1019,24 @@ for my $condition ('true', 'false') {
     $dbh->pg_exit_pipeline_mode();
 }
 
+# Error results retain SQLSTATE without raising away the result queue.
+$dbh->do('CREATE TEMP TABLE dbd_pg_test_pipeline_unique (id integer PRIMARY KEY)');
+$dbh->do('INSERT INTO dbd_pg_test_pipeline_unique VALUES (1)');
+$dbh->pg_enter_pipeline_mode();
+$dbh->pg_send_query_params('INSERT INTO dbd_pg_test_pipeline_unique VALUES (1)');
+$dbh->pg_send_query_params('SELECT 42');
+$dbh->pg_pipeline_sync();
+$result = $dbh->pg_getresult();
+is ($result->{status}, 7, 'Duplicate key is a fatal error result');
+is ($result->{sqlstate}, '23505', 'Duplicate key SQLSTATE retained');
+$dbh->pg_getresult();
+$result = $dbh->pg_getresult();
+is ($result->{status}, 11, 'Command after error is skipped');
+is ($result->{sqlstate}, undef, 'Skipped command has no server SQLSTATE');
+$dbh->pg_getresult();
+$result = $dbh->pg_getresult();
+is ($result->{sqlstate}, undef, 'Sync marker has no server SQLSTATE');
+$dbh->pg_exit_pipeline_mode();
+
 cleanup_database($dbh,'test');
 $dbh->disconnect;

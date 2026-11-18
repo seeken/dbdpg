@@ -4656,6 +4656,7 @@ The hashref contains:
 
   status    - integer status code
   error     - error message string, or undef
+  sqlstate  - server SQLSTATE string, or undef when absent
   ntuples   - number of rows (for SELECT results)
   nfields   - number of columns
   names     - arrayref of column names (when fields are present)
