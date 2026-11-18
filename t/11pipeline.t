@@ -83,7 +83,7 @@ eval {
 };
 ok ($@, $t);
 
-# pg_pipeline_sync + pg_getresult: basic sync cycle
+# pg_pipeline_sync + pg_get_result: basic sync cycle
 
 $dbh->pg_enter_pipeline_mode();
 
@@ -91,23 +91,23 @@ $t='pg_pipeline_sync succeeds in pipeline mode';
 $result = $dbh->pg_pipeline_sync();
 is ($result, 1, $t);
 
-$t='pg_getresult returns pipeline sync result';
-$result = $dbh->pg_getresult();
+$t='pg_get_result returns pipeline sync result';
+$result = $dbh->pg_get_result();
 is (ref $result, 'HASH', $t);
 
 $t='Pipeline sync result has status PGRES_PIPELINE_SYNC';
 is ($result->{status}, PGRES_PIPELINE_SYNC, $t);
 
-$t='pg_getresult returns undef after sync result';
-my $null_result = $dbh->pg_getresult();
+$t='pg_get_result returns undef after sync result';
+my $null_result = $dbh->pg_get_result();
 ok (!defined $null_result, $t);
 
 $dbh->pg_exit_pipeline_mode();
 
-# pg_getresult when not in pipeline mode
+# pg_get_result when not in pipeline mode
 
-$t='pg_getresult returns undef when no results pending';
-$null_result = $dbh->pg_getresult();
+$t='pg_get_result returns undef when no results pending';
+$null_result = $dbh->pg_get_result();
 ok (!defined $null_result, $t);
 
 # Verify connection is still good
@@ -121,8 +121,8 @@ is ($@, q{}, $t);
 $t='Enter/exit pipeline still works after sync cycle';
 $dbh->pg_enter_pipeline_mode();
 $dbh->pg_pipeline_sync();
-$dbh->pg_getresult();  # PIPELINE_SYNC
-$dbh->pg_getresult();  # NULL
+$dbh->pg_get_result();  # PIPELINE_SYNC
+$dbh->pg_get_result();  # NULL
 $dbh->pg_exit_pipeline_mode();
 eval { $dbh->do('SELECT 2'); };
 is ($@, q{}, $t);
@@ -153,23 +153,23 @@ is ($result, 1, $t);
 # Collect results: INSERT1 -> NULL -> INSERT2 -> NULL -> SYNC
 
 $t='First INSERT result is COMMAND_OK';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_COMMAND_OK, $t);  # PGRES_COMMAND_OK
 
 $t='NULL separator after first INSERT';
-my $null_result2 = $dbh->pg_getresult();
+my $null_result2 = $dbh->pg_get_result();
 ok (!defined $null_result2, $t);
 
 $t='Second INSERT result is COMMAND_OK';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_COMMAND_OK, $t);
 
 $t='NULL separator after second INSERT';
-$null_result2 = $dbh->pg_getresult();
+$null_result2 = $dbh->pg_get_result();
 ok (!defined $null_result2, $t);
 
 $t='PIPELINE_SYNC result';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 ok (defined $result && $result->{status} == PGRES_PIPELINE_SYNC, $t);
 
 $dbh->pg_exit_pipeline_mode();
@@ -195,7 +195,7 @@ is ($result, 1, $t);
 $dbh->pg_pipeline_sync();
 
 $t='SELECT result is TUPLES_OK';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, $t);
 
 $t='SELECT result has correct ntuples';
@@ -207,8 +207,8 @@ is ($result->{nfields}, 2, $t);
 $t='SELECT result rows contain correct data';
 is_deeply ($result->{rows}, [['1', 'Alice']], $t);
 
-$null_result = $dbh->pg_getresult();  # NULL separator
-$result = $dbh->pg_getresult();       # PIPELINE_SYNC
+$null_result = $dbh->pg_get_result();  # NULL separator
+$result = $dbh->pg_get_result();       # PIPELINE_SYNC
 $dbh->pg_exit_pipeline_mode();
 
 # Pipeline error handling
@@ -226,22 +226,22 @@ is ($result, 1, $t);
 $dbh->pg_pipeline_sync();
 
 $t='First result is FATAL_ERROR';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_FATAL_ERROR, $t);
 
 $t='Error result has error message';
 ok (defined $result->{error}, $t);
 
-$null_result = $dbh->pg_getresult();  # NULL separator
+$null_result = $dbh->pg_get_result();  # NULL separator
 
 $t='Second result is PIPELINE_ABORTED';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_PIPELINE_ABORTED, $t);
 
-$null_result = $dbh->pg_getresult();  # NULL separator
+$null_result = $dbh->pg_get_result();  # NULL separator
 
 $t='PIPELINE_SYNC after error recovery';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 ok (defined $result && $result->{status} == PGRES_PIPELINE_SYNC, $t);
 
 $dbh->pg_exit_pipeline_mode();
@@ -282,22 +282,22 @@ $dbh->pg_pipeline_sync();
 
 # Collect: PREPARE -> NULL -> INSERT1 -> NULL -> INSERT2 -> NULL -> SYNC
 $t='PREPARE result is COMMAND_OK';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_COMMAND_OK, $t);
-$dbh->pg_getresult();  # NULL
+$dbh->pg_get_result();  # NULL
 
 $t='First prepared INSERT is COMMAND_OK';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_COMMAND_OK, $t);
-$dbh->pg_getresult();  # NULL
+$dbh->pg_get_result();  # NULL
 
 $t='Second prepared INSERT is COMMAND_OK';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_COMMAND_OK, $t);
-$dbh->pg_getresult();  # NULL
+$dbh->pg_get_result();  # NULL
 
 $t='PIPELINE_SYNC after prepared statements';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 ok (defined $result && $result->{status} == PGRES_PIPELINE_SYNC, $t);
 
 $dbh->pg_exit_pipeline_mode();
@@ -331,15 +331,15 @@ is ($result, 1, $t);
 $dbh->pg_flush();
 
 $t='Flush request lets us retrieve result without sync';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, $t);
 is_deeply ($result->{rows}, [['42']], "$t data correct");
 
-$dbh->pg_getresult();  # NULL separator
+$dbh->pg_get_result();  # NULL separator
 
 # Need a sync to cleanly exit
 $dbh->pg_pipeline_sync();
-$dbh->pg_getresult();  # PIPELINE_SYNC
+$dbh->pg_get_result();  # PIPELINE_SYNC
 $dbh->pg_exit_pipeline_mode();
 
 # Guards: COPY rejected in pipeline mode
@@ -398,9 +398,9 @@ eval {
 ok ($@, $t);
 
 # Drain results before exiting
-$dbh->pg_getresult();  # SELECT result
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # PIPELINE_SYNC
+$dbh->pg_get_result();  # SELECT result
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # PIPELINE_SYNC
 
 $t='pg_exit_pipeline_mode succeeds after draining results';
 $result = $dbh->pg_exit_pipeline_mode();
@@ -421,10 +421,10 @@ $dbh->pg_send_query_params(
 );
 $dbh->pg_pipeline_sync();
 
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_COMMAND_OK, $t);
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # PIPELINE_SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # PIPELINE_SYNC
 
 $t='Second pipeline cycle: SELECT';
 $dbh->pg_send_query_params(
@@ -433,11 +433,11 @@ $dbh->pg_send_query_params(
 );
 $dbh->pg_pipeline_sync();
 
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, $t);
 is_deeply ($result->{rows}, [['Cycle1']], "$t correct data");
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # PIPELINE_SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # PIPELINE_SYNC
 
 $dbh->pg_exit_pipeline_mode();
 
@@ -465,13 +465,13 @@ $dbh->pg_pipeline_sync();
 $t='Large pipeline: drain all 100 results';
 my $drain_ok = 1;
 for my $i (1..100) {
-    my $r = $dbh->pg_getresult();
+    my $r = $dbh->pg_get_result();
     if (!$r || $r->{status} != PGRES_COMMAND_OK) { $drain_ok = 0; last; }
-    $dbh->pg_getresult();  # NULL separator
+    $dbh->pg_get_result();  # NULL separator
 }
 ok ($drain_ok, $t);
 
-$result = $dbh->pg_getresult();  # PIPELINE_SYNC
+$result = $dbh->pg_get_result();  # PIPELINE_SYNC
 ok (defined $result && $result->{status} == PGRES_PIPELINE_SYNC, "$t sync");
 
 $dbh->pg_exit_pipeline_mode();
@@ -491,14 +491,14 @@ $dbh->pg_send_query_params(
 );
 $dbh->pg_pipeline_sync();
 
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, $t);
 is ($result->{ntuples}, 0, "$t with ntuples 0");
 is ($result->{nfields}, 2, "$t with correct nfields");
 ok (!exists $result->{rows}, "$t has no rows key");
 
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # PIPELINE_SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # PIPELINE_SYNC
 $dbh->pg_exit_pipeline_mode();
 
 # NULL parameter values
@@ -514,12 +514,12 @@ is ($result, 1, $t);
 
 $dbh->pg_pipeline_sync();
 
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, "$t returns TUPLES_OK");
 is ($result->{rows}[0][0], undef, "$t NULL value returned as undef");
 
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # PIPELINE_SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # PIPELINE_SYNC
 $dbh->pg_exit_pipeline_mode();
 
 # pg_pipeline_status returns 2 (aborted) during error
@@ -529,14 +529,14 @@ $dbh->pg_enter_pipeline_mode();
 $dbh->pg_send_query_params('GARBAGE', []);
 $dbh->pg_pipeline_sync();
 
-$dbh->pg_getresult();  # FATAL_ERROR
-$dbh->pg_getresult();  # NULL
+$dbh->pg_get_result();  # FATAL_ERROR
+$dbh->pg_get_result();  # NULL
 
 $t='pg_pipeline_status returns 2 (aborted) after error';
 $status = $dbh->pg_pipeline_status();
 is ($status, 2, $t);
 
-$dbh->pg_getresult();  # PIPELINE_SYNC
+$dbh->pg_get_result();  # PIPELINE_SYNC
 
 $t='pg_pipeline_status returns 1 (on) after sync clears abort';
 $status = $dbh->pg_pipeline_status();
@@ -557,10 +557,10 @@ my $flush_result = $dbh->pg_flush();
 ok ($flush_result == 0 || $flush_result == 1, $t);
 
 # Drain
-$dbh->pg_getresult();  # SELECT result
-$dbh->pg_getresult();  # NULL
+$dbh->pg_get_result();  # SELECT result
+$dbh->pg_get_result();  # NULL
 $dbh->pg_pipeline_sync();
-$dbh->pg_getresult();  # PIPELINE_SYNC
+$dbh->pg_get_result();  # PIPELINE_SYNC
 $dbh->pg_exit_pipeline_mode();
 
 # pg_send_query_params with no params
@@ -573,12 +573,12 @@ is ($result, 1, $t);
 
 $dbh->pg_pipeline_sync();
 
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, "$t returns TUPLES_OK");
 is_deeply ($result->{rows}, [['42']], "$t correct data");
 
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # PIPELINE_SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # PIPELINE_SYNC
 $dbh->pg_exit_pipeline_mode();
 
 # Two consecutive syncs
@@ -591,17 +591,17 @@ $dbh->pg_send_query_params('SELECT 2 AS b', []);
 $dbh->pg_pipeline_sync();
 
 # Drain first pipeline: result -> NULL -> SYNC
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, 'First sync group: TUPLES_OK');
-$dbh->pg_getresult();  # NULL
-$result = $dbh->pg_getresult();
+$dbh->pg_get_result();  # NULL
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_PIPELINE_SYNC, 'First PIPELINE_SYNC');
 
 # Drain second pipeline: result -> NULL -> SYNC
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, 'Second sync group: TUPLES_OK');
-$dbh->pg_getresult();  # NULL
-$result = $dbh->pg_getresult();
+$dbh->pg_get_result();  # NULL
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_PIPELINE_SYNC, 'Second PIPELINE_SYNC');
 
 $dbh->pg_exit_pipeline_mode();
@@ -630,16 +630,16 @@ is ($result, 1, $t);
 $dbh->pg_pipeline_sync();
 
 $t='? INSERT result is COMMAND_OK';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_COMMAND_OK, $t);
-$dbh->pg_getresult();  # NULL
+$dbh->pg_get_result();  # NULL
 
 $t='? SELECT result has correct data';
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, $t);
 is_deeply ($result->{rows}, [['1', 'Alice']], "$t rows match");
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # PIPELINE_SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # PIPELINE_SYNC
 
 $dbh->pg_exit_pipeline_mode();
 
@@ -655,10 +655,10 @@ $result = $dbh->pg_send_query_params(
 is ($result, 1, $t);
 
 $dbh->pg_pipeline_sync();
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_COMMAND_OK, $t);
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # PIPELINE_SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # PIPELINE_SYNC
 
 $dbh->pg_exit_pipeline_mode();
 
@@ -681,13 +681,13 @@ $result = $dbh->pg_send_query_params(
 is ($result, 1, $t);
 $dbh->pg_pipeline_sync();
 
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, "$t TUPLES_OK");
 is ($result->{rows}[0][0], 'what?', "$t literal preserved");
 is ($result->{rows}[0][1], 'hello', "$t param bound correctly");
 
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # SYNC
 $dbh->pg_exit_pipeline_mode();
 
 # ? inside double-quoted identifier - use a column alias
@@ -702,12 +702,12 @@ $result = $dbh->pg_send_query_params(
 is ($result, 1, $t);
 $dbh->pg_pipeline_sync();
 
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, "$t TUPLES_OK");
 is ($result->{rows}[0][0], 'test', "$t param bound correctly");
 
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # SYNC
 $dbh->pg_exit_pipeline_mode();
 
 # ? inside dollar-quoted string
@@ -722,13 +722,13 @@ $result = $dbh->pg_send_query_params(
 is ($result, 1, $t);
 $dbh->pg_pipeline_sync();
 
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, "$t TUPLES_OK");
 is ($result->{rows}[0][0], 'what?', "$t dollar-quoted preserved");
 is ($result->{rows}[0][1], 'hello', "$t param bound correctly");
 
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # SYNC
 $dbh->pg_exit_pipeline_mode();
 
 # ? inside line comment
@@ -743,12 +743,12 @@ $result = $dbh->pg_send_query_params(
 is ($result, 1, $t);
 $dbh->pg_pipeline_sync();
 
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, "$t TUPLES_OK");
 is ($result->{rows}[0][0], '42', "$t param bound correctly");
 
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # SYNC
 $dbh->pg_exit_pipeline_mode();
 
 # ? inside block comment
@@ -763,12 +763,12 @@ $result = $dbh->pg_send_query_params(
 is ($result, 1, $t);
 $dbh->pg_pipeline_sync();
 
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, "$t TUPLES_OK");
 is ($result->{rows}[0][0], '99', "$t param bound correctly");
 
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # SYNC
 $dbh->pg_exit_pipeline_mode();
 
 # Multiple ? convert to correct $1, $2, $3 sequence
@@ -783,12 +783,12 @@ $result = $dbh->pg_send_query_params(
 is ($result, 1, $t);
 $dbh->pg_pipeline_sync();
 
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, "$t TUPLES_OK");
 is_deeply ($result->{rows}, [['x', 'y', 'z']], "$t all params correct");
 
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # SYNC
 $dbh->pg_exit_pipeline_mode();
 
 # Dollar placeholders pass through unchanged
@@ -803,12 +803,12 @@ $result = $dbh->pg_send_query_params(
 is ($result, 1, $t);
 $dbh->pg_pipeline_sync();
 
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_TUPLES_OK, "$t TUPLES_OK");
 is ($result->{rows}[0][0], 'works', "$t \$1 param correct");
 
-$dbh->pg_getresult();  # NULL
-$dbh->pg_getresult();  # SYNC
+$dbh->pg_get_result();  # NULL
+$dbh->pg_get_result();  # SYNC
 $dbh->pg_exit_pipeline_mode();
 
 # DBI transactions survive sync: only the caller's result is visible.
@@ -820,11 +820,11 @@ for my $finish (qw(rollback commit)) {
     $dbh->pg_enter_pipeline_mode();
     $dbh->pg_send_query_params('INSERT INTO dbd_pg_test_pipeline_txn VALUES (?)', [1]);
     $dbh->pg_pipeline_sync();
-    $result = $dbh->pg_getresult();
+    $result = $dbh->pg_get_result();
     is ($result->{status}, PGRES_COMMAND_OK, "$finish sees INSERT result first");
     is ($result->{cmdtuples}, '1', "$finish sees INSERT row count");
-    is ($dbh->pg_getresult(), undef, "$finish sees one separator");
-    is ($dbh->pg_getresult()->{status}, PGRES_PIPELINE_SYNC, "$finish sees sync next");
+    is ($dbh->pg_get_result(), undef, "$finish sees one separator");
+    is ($dbh->pg_get_result()->{status}, PGRES_PIPELINE_SYNC, "$finish sees sync next");
     $dbh->pg_exit_pipeline_mode();
     if ($finish eq 'rollback') { $dbh->rollback(); }
     else { $dbh->commit(); }
@@ -839,10 +839,10 @@ $dbh->pg_send_prepare('pipeline_txn', 'INSERT INTO dbd_pg_test_pipeline_txn VALU
 $dbh->pg_send_query_prepared('pipeline_txn', [2]);
 $dbh->pg_pipeline_sync();
 for my $command (qw(prepare insert)) {
-    is ($dbh->pg_getresult()->{status}, PGRES_COMMAND_OK, "begin_work $command result");
-    $dbh->pg_getresult();
+    is ($dbh->pg_get_result()->{status}, PGRES_COMMAND_OK, "begin_work $command result");
+    $dbh->pg_get_result();
 }
-$dbh->pg_getresult();
+$dbh->pg_get_result();
 $dbh->pg_exit_pipeline_mode();
 $dbh->rollback();
 ok ($dbh->{AutoCommit}, 'begin_work rollback restores AutoCommit');
@@ -854,9 +854,9 @@ $dbh->{AutoCommit} = 0;
 $dbh->pg_enter_pipeline_mode();
 $dbh->pg_send_query_prepared('pipeline_txn', [3]);
 $dbh->pg_pipeline_sync();
-is ($dbh->pg_getresult()->{status}, PGRES_COMMAND_OK, 'Prepared execution starts deferred transaction');
-$dbh->pg_getresult();
-$dbh->pg_getresult();
+is ($dbh->pg_get_result()->{status}, PGRES_COMMAND_OK, 'Prepared execution starts deferred transaction');
+$dbh->pg_get_result();
+$dbh->pg_get_result();
 $dbh->pg_exit_pipeline_mode();
 $dbh->rollback();
 $dbh->{AutoCommit} = 1;
@@ -870,11 +870,11 @@ $dbh->pg_enter_pipeline_mode();
 $dbh->pg_send_query_params('SHOW transaction_read_only');
 $dbh->pg_send_query_params('INSERT INTO dbd_pg_test_pipeline_txn VALUES (4)');
 $dbh->pg_pipeline_sync();
-is_deeply ($dbh->pg_getresult()->{rows}, [['on']], 'Pipeline honors ReadOnly');
-$dbh->pg_getresult();
-is ($dbh->pg_getresult()->{status}, PGRES_FATAL_ERROR, 'ReadOnly rejects pipeline writes');
-$dbh->pg_getresult();
-$dbh->pg_getresult();
+is_deeply ($dbh->pg_get_result()->{rows}, [['on']], 'Pipeline honors ReadOnly');
+$dbh->pg_get_result();
+is ($dbh->pg_get_result()->{status}, PGRES_FATAL_ERROR, 'ReadOnly rejects pipeline writes');
+$dbh->pg_get_result();
+$dbh->pg_get_result();
 $dbh->pg_exit_pipeline_mode();
 $dbh->{ReadOnly} = 0;
 $dbh->rollback();
@@ -888,12 +888,13 @@ eval { $dbh->pg_send_query_params('SELECT 456'); };
 like ($@, qr{Cannot start a deferred DBI transaction in a busy pipeline},
     'Late transaction start is rejected before adding a hidden command');
 $dbh->pg_pipeline_sync();
-is_deeply ($dbh->pg_getresult()->{rows}, [['123']], 'Earlier caller result is preserved');
-$dbh->pg_getresult();
-$dbh->pg_getresult();
+is_deeply ($dbh->pg_get_result()->{rows}, [['123']], 'Earlier caller result is preserved');
+$dbh->pg_get_result();
+$dbh->pg_get_result();
 $dbh->pg_exit_pipeline_mode();
 $dbh->rollback();
 $dbh->{AutoCommit} = 1;
+
 # Placeholder scanning follows the normal driver's escape/settings rules.
 for my $case (
     [q{SELECT '$1.00'::text, ?::text}, [['$1.00', 'bound']]],
@@ -910,9 +911,9 @@ for my $case (
     $dbh->pg_enter_pipeline_mode();
     $dbh->pg_send_query_params($sql, [$sql =~ /jsonb/ ? 'k' : 'bound']);
     $dbh->pg_pipeline_sync();
-    is_deeply ($dbh->pg_getresult()->{rows}, $want, "Placeholder scan: $sql");
-    $dbh->pg_getresult();
-    $dbh->pg_getresult();
+    is_deeply ($dbh->pg_get_result()->{rows}, $want, "Placeholder scan: $sql");
+    $dbh->pg_get_result();
+    $dbh->pg_get_result();
     $dbh->pg_exit_pipeline_mode();
 }
 for my $sql ('SELECT ?, $1', 'SELECT $1, ?') {
@@ -929,13 +930,13 @@ $dbh->pg_send_query_params(q{SELECT '{"k":1}'::jsonb ? $1}, ['k']);
 $dbh->pg_send_prepare('pipeline_json', q{SELECT '{"k":1}'::jsonb ? $1});
 $dbh->pg_send_query_prepared('pipeline_json', ['k']);
 $dbh->pg_pipeline_sync();
-is_deeply ($dbh->pg_getresult()->{rows}, [['t']], 'Dollar only preserves JSON operator');
-$dbh->pg_getresult();
-is ($dbh->pg_getresult()->{status}, PGRES_COMMAND_OK, 'Dollar only prepare succeeds');
-$dbh->pg_getresult();
-is_deeply ($dbh->pg_getresult()->{rows}, [['t']], 'Dollar only prepared query succeeds');
-$dbh->pg_getresult();
-$dbh->pg_getresult();
+is_deeply ($dbh->pg_get_result()->{rows}, [['t']], 'Dollar only preserves JSON operator');
+$dbh->pg_get_result();
+is ($dbh->pg_get_result()->{status}, PGRES_COMMAND_OK, 'Dollar only prepare succeeds');
+$dbh->pg_get_result();
+is_deeply ($dbh->pg_get_result()->{rows}, [['t']], 'Dollar only prepared query succeeds');
+$dbh->pg_get_result();
+$dbh->pg_get_result();
 $dbh->pg_exit_pipeline_mode();
 $dbh->{pg_placeholder_dollaronly} = 0;
 $dbh->do('DEALLOCATE pipeline_json');
@@ -954,15 +955,15 @@ for my $encoding (qw(UTF8 LATIN1)) {
         $dbh->pg_send_query_prepared('pipeline_encoding', [$value]);
         $dbh->pg_pipeline_sync();
         for my $command (qw(params prepare prepared)) {
-            $result = $dbh->pg_getresult();
+            $result = $dbh->pg_get_result();
             if ($command ne 'prepare') {
                 is ($result->{rows}[0][0], $normal, "$encoding $flag $command round trip");
                 is (!!utf8::is_utf8($result->{rows}[0][0]), !!utf8::is_utf8($normal),
                     "$encoding $flag $command result flag");
             }
-            $dbh->pg_getresult();
+            $dbh->pg_get_result();
         }
-        $dbh->pg_getresult();
+        $dbh->pg_get_result();
         $dbh->pg_exit_pipeline_mode();
         is (!!utf8::is_utf8($value), !!$flag, 'Binding preserves input flag');
         $dbh->do('DEALLOCATE pipeline_encoding');
@@ -976,11 +977,11 @@ for my $utf8 (0, 1) {
     $dbh->pg_enter_pipeline_mode();
     $dbh->pg_send_query_params(q{SELECT 'plain'::text});
     $dbh->pg_pipeline_sync();
-    $result = $dbh->pg_getresult();
+    $result = $dbh->pg_get_result();
     is (!!utf8::is_utf8($result->{rows}[0][0]), !!utf8::is_utf8($normal),
         'Explicit encoding flag matches normal fetch');
-    $dbh->pg_getresult();
-    $dbh->pg_getresult();
+    $dbh->pg_get_result();
+    $dbh->pg_get_result();
     $dbh->pg_exit_pipeline_mode();
 }
 $dbh->{pg_enable_utf8} = -1;
@@ -989,9 +990,9 @@ utf8::upgrade($sql_value);
 $dbh->pg_enter_pipeline_mode();
 $dbh->pg_send_query_params("SELECT '$sql_value'::text");
 $dbh->pg_pipeline_sync();
-is ($dbh->pg_getresult()->{rows}[0][0], $sql_value, 'SQL text uses client encoding');
-$dbh->pg_getresult();
-$dbh->pg_getresult();
+is ($dbh->pg_get_result()->{rows}[0][0], $sql_value, 'SQL text uses client encoding');
+$dbh->pg_get_result();
+$dbh->pg_get_result();
 $dbh->pg_exit_pipeline_mode();
 
 $dbh->pg_enter_pipeline_mode();
@@ -1004,14 +1005,14 @@ $dbh->pg_send_prepare('pipeline_bytea', q{SELECT $1::bytea});
 $dbh->pg_send_query_prepared('pipeline_bytea', ['\x610062ff']);
 $dbh->pg_pipeline_sync();
 for my $command (qw(params prepare prepared)) {
-    $result = $dbh->pg_getresult();
+    $result = $dbh->pg_get_result();
     if ($command ne 'prepare') {
         is ($result->{rows}[0][0], '\x610062ff', "$command bytea preserves escaped NUL");
         ok (!utf8::is_utf8($result->{rows}[0][0]), "$command bytea is not flagged");
     }
-    $dbh->pg_getresult();
+    $dbh->pg_get_result();
 }
-$dbh->pg_getresult();
+$dbh->pg_get_result();
 $dbh->pg_exit_pipeline_mode();
 $dbh->do('DEALLOCATE pipeline_bytea');
 
@@ -1020,11 +1021,11 @@ for my $condition ('true', 'false') {
     $dbh->pg_enter_pipeline_mode();
     $dbh->pg_send_query_params("SELECT 1::int4 AS id, 'hello'::text AS label WHERE $condition");
     $dbh->pg_pipeline_sync();
-    $result = $dbh->pg_getresult();
+    $result = $dbh->pg_get_result();
     is_deeply ($result->{names}, ['id', 'label'], "Column names with condition $condition");
     is_deeply ($result->{types}, [23, 25], "Column type identifiers with condition $condition");
-    $dbh->pg_getresult();
-    $dbh->pg_getresult();
+    $dbh->pg_get_result();
+    $dbh->pg_get_result();
     $dbh->pg_exit_pipeline_mode();
 }
 
@@ -1035,15 +1036,15 @@ $dbh->pg_enter_pipeline_mode();
 $dbh->pg_send_query_params('INSERT INTO dbd_pg_test_pipeline_unique VALUES (1)');
 $dbh->pg_send_query_params('SELECT 42');
 $dbh->pg_pipeline_sync();
-$result = $dbh->pg_getresult();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_FATAL_ERROR, 'Duplicate key is a fatal error result');
 is ($result->{sqlstate}, '23505', 'Duplicate key SQLSTATE retained');
-$dbh->pg_getresult();
-$result = $dbh->pg_getresult();
+$dbh->pg_get_result();
+$result = $dbh->pg_get_result();
 is ($result->{status}, PGRES_PIPELINE_ABORTED, 'Command after error is skipped');
 is ($result->{sqlstate}, undef, 'Skipped command has no server SQLSTATE');
-$dbh->pg_getresult();
-$result = $dbh->pg_getresult();
+$dbh->pg_get_result();
+$result = $dbh->pg_get_result();
 is ($result->{sqlstate}, undef, 'Sync marker has no server SQLSTATE');
 $dbh->pg_exit_pipeline_mode();
 
@@ -1061,7 +1062,7 @@ for my $phase (qw(empty queued)) {
     eval {
         local $SIG{ALRM} = sub { die "pipeline read timed out\n"; };
         alarm 3;
-        $dbh->pg_getresult();
+        $dbh->pg_get_result();
     };
     alarm 0;
     like ($@, qr{requires a pending pipeline sync or flush request}, "$phase read rejected");
@@ -1069,21 +1070,21 @@ for my $phase (qw(empty queued)) {
 $dbh->pg_send_flush_request();
 $dbh->pg_flush();
 $dbh->pg_send_query_params('SELECT 2');
-is ($dbh->pg_getresult()->{status}, PGRES_TUPLES_OK, 'Flush covers first command');
-is ($dbh->pg_getresult(), undef, 'Flush includes first command separator');
+is ($dbh->pg_get_result()->{status}, PGRES_TUPLES_OK, 'Flush covers first command');
+is ($dbh->pg_get_result(), undef, 'Flush includes first command separator');
 eval {
     local $SIG{ALRM} = sub { die "pipeline read timed out\n"; };
     alarm 3;
-    $dbh->pg_getresult();
+    $dbh->pg_get_result();
 };
 alarm 0;
 like ($@, qr{requires a pending pipeline sync or flush request}, 'Flush does not cover later sends');
 $dbh->pg_pipeline_sync();
-is_deeply ($dbh->pg_getresult()->{rows}, [['2']], 'Sync permits remaining command');
-$dbh->pg_getresult();
-is ($dbh->pg_getresult()->{status}, PGRES_PIPELINE_SYNC, 'Guard preserves sync result');
-is ($dbh->pg_getresult(), undef, 'One final empty result after sync');
-eval { $dbh->pg_getresult(); };
+is_deeply ($dbh->pg_get_result()->{rows}, [['2']], 'Sync permits remaining command');
+$dbh->pg_get_result();
+is ($dbh->pg_get_result()->{status}, PGRES_PIPELINE_SYNC, 'Guard preserves sync result');
+is ($dbh->pg_get_result(), undef, 'One final empty result after sync');
+eval { $dbh->pg_get_result(); };
 like ($@, qr{requires a pending pipeline sync or flush request}, 'Repeated empty read rejected');
 $dbh->pg_exit_pipeline_mode();
 
@@ -1101,9 +1102,9 @@ for my $method (qw(do execute ping commit rollback)) {
 }
 $dbh->pg_send_query_params('SELECT 42');
 $dbh->pg_pipeline_sync();
-is_deeply ($dbh->pg_getresult()->{rows}, [['42']], 'Guards leave pipeline usable');
-$dbh->pg_getresult();
-$dbh->pg_getresult();
+is_deeply ($dbh->pg_get_result()->{rows}, [['42']], 'Guards leave pipeline usable');
+$dbh->pg_get_result();
+$dbh->pg_get_result();
 $dbh->pg_exit_pipeline_mode();
 $dbh->rollback();
 $guard_sth->execute(1);
@@ -1123,9 +1124,9 @@ for my $teardown (qw(disconnect destroy)) {
             $other->pg_send_query_params('INSERT INTO public.dbd_pg_test_pipeline_disconnect VALUES (1)');
             $other->pg_pipeline_sync();
             if ($pending eq 'drained') {
-                $other->pg_getresult();
-                $other->pg_getresult();
-                $other->pg_getresult();
+                $other->pg_get_result();
+                $other->pg_get_result();
+                $other->pg_get_result();
             }
         }
         my @warnings;
@@ -1143,6 +1144,8 @@ for my $teardown (qw(disconnect destroy)) {
     }
 }
 $dbh->do('DROP TABLE public.dbd_pg_test_pipeline_disconnect');
+
+ok ($dbh->can('pg_get_result'), 'Underscored result method is installed');
 
 cleanup_database($dbh,'test');
 $dbh->disconnect;

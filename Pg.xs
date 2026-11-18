@@ -869,10 +869,10 @@ pg_pipeline_sync(dbh)
         RETVAL
 
 void
-pg_getresult(dbh)
+pg_get_result(dbh)
     SV * dbh
     CODE:
-        ST(0) = pg_db_getresult(dbh);
+        ST(0) = pg_db_get_result(dbh);
 
 I32
 pg_send_query_params(dbh, sql, ...)

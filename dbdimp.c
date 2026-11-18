@@ -5184,7 +5184,7 @@ static PGresult *pg_pipeline_result(pTHX_ SV *dbh, imp_dbh_t *imp_dbh)
             return NULL;
         }
         pg_error(aTHX_ dbh, PGRES_FATAL_ERROR,
-            "pg_getresult requires a pending pipeline sync or flush request");
+            "pg_get_result requires a pending pipeline sync or flush request");
         return NULL;
     }
     TRACE_PQGETRESULT;
@@ -5214,7 +5214,7 @@ static PGresult *pg_pipeline_result(pTHX_ SV *dbh, imp_dbh_t *imp_dbh)
 
 
 /* ================================================================== */
-SV * pg_db_getresult (SV * dbh)
+SV * pg_db_get_result (SV * dbh)
 {
     dTHX;
     D_imp_dbh(dbh);
@@ -5227,7 +5227,7 @@ SV * pg_db_getresult (SV * dbh)
     const char * sqlstate;
     const char * cmdtuples;
 
-    if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_getresult\n", THEADER_slow);
+    if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_get_result\n", THEADER_slow);
 
     /* Hide the deferred BEGIN and its NULL separator, including on error.
      * Report a failed internal command through the normal DBI error path. */
@@ -5262,7 +5262,7 @@ SV * pg_db_getresult (SV * dbh)
     result = pg_pipeline_result(aTHX_ dbh, imp_dbh);
 
     if (NULL == result) {
-        if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_getresult (undef)\n", THEADER_slow);
+        if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_get_result (undef)\n", THEADER_slow);
         return &PL_sv_undef;
     }
 
@@ -5350,10 +5350,10 @@ SV * pg_db_getresult (SV * dbh)
 
     retsv = newRV_noinc((SV*)hv);
 
-    if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_getresult (status: %d)\n", THEADER_slow, (int)status);
+    if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_get_result (status: %d)\n", THEADER_slow, (int)status);
     return sv_2mortal(retsv);
 
-} /* end of pg_db_getresult */
+} /* end of pg_db_get_result */
 
 
 #ifdef DBDPG_HAS_PIPELINE

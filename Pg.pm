@@ -182,7 +182,7 @@ use 5.008001;
             DBD::Pg::db->install_method('pg_putcopyend');
             DBD::Pg::db->install_method('pg_enter_pipeline_mode');
             DBD::Pg::db->install_method('pg_exit_pipeline_mode');
-            DBD::Pg::db->install_method('pg_getresult');
+            DBD::Pg::db->install_method('pg_get_result');
             DBD::Pg::db->install_method('pg_pipeline_status');
             DBD::Pg::db->install_method('pg_pipeline_sync');
             DBD::Pg::db->install_method('pg_putcopyend_async');
@@ -4646,7 +4646,7 @@ an older version. Returns 1 on success, 0 on failure.
 =head3 B<pg_exit_pipeline_mode>
 
 Exits pipeline mode. Fails if there are unconsumed results; call
-L</pg_getresult> to drain all results before exiting. Exiting when
+L</pg_get_result> to drain all results before exiting. Exiting when
 not in pipeline mode is a no-op. Returns 1 on success, 0 on failure.
 
   $dbh->pg_exit_pipeline_mode();
@@ -4670,7 +4670,7 @@ pipeline mode.
 
   $dbh->pg_pipeline_sync();
 
-=head3 B<pg_getresult>
+=head3 B<pg_get_result>
 
 Retrieves the next result from the connection. In pipeline mode, first send a
 C<pg_pipeline_sync> or C<pg_send_flush_request> covering the commands to read.
@@ -4715,7 +4715,7 @@ Each query's results are terminated by an C<undef> return, which acts as a
 boundary marker between queries, similar to how delimiters separate fields
 in a string. Callers must consume each C<undef> separator before the next
 query's result becomes available. In practice, odd-numbered calls to
-C<pg_getresult> return actual results while even-numbered calls return the
+C<pg_get_result> return actual results while even-numbered calls return the
 C<undef> delimiters. The final call returns a hashref with status 10
 (PIPELINE_SYNC) to mark the end of the sync group. This protocol mirrors
 libpq's C<PQgetResult> behavior directly and matches how other drivers
@@ -4730,12 +4730,12 @@ Example:
   $dbh->pg_send_query_params('SELECT * FROM t', []);
   $dbh->pg_pipeline_sync();
 
-  my $ins = $dbh->pg_getresult();    # status == PGRES_COMMAND_OK
-  $dbh->pg_getresult();              # undef (separator)
-  my $sel = $dbh->pg_getresult();    # status == PGRES_TUPLES_OK
+  my $ins = $dbh->pg_get_result();    # status == PGRES_COMMAND_OK
+  $dbh->pg_get_result();              # undef (separator)
+  my $sel = $dbh->pg_get_result();    # status == PGRES_TUPLES_OK
   my @rows = @{ $sel->{rows} };
-  $dbh->pg_getresult();              # undef (separator)
-  $dbh->pg_getresult();              # status == PGRES_PIPELINE_SYNC
+  $dbh->pg_get_result();              # undef (separator)
+  $dbh->pg_get_result();              # status == PGRES_PIPELINE_SYNC
 
   $dbh->pg_exit_pipeline_mode();
 
