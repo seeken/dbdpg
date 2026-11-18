@@ -1006,5 +1006,18 @@ $dbh->pg_getresult();
 $dbh->pg_exit_pipeline_mode();
 $dbh->do('DEALLOCATE pipeline_bytea');
 
+# Field metadata is independent of the row count.
+for my $condition ('true', 'false') {
+    $dbh->pg_enter_pipeline_mode();
+    $dbh->pg_send_query_params("SELECT 1::int4 AS id, 'hello'::text AS label WHERE $condition");
+    $dbh->pg_pipeline_sync();
+    $result = $dbh->pg_getresult();
+    is_deeply ($result->{names}, ['id', 'label'], "Column names with condition $condition");
+    is_deeply ($result->{types}, [23, 25], "Column type OIDs with condition $condition");
+    $dbh->pg_getresult();
+    $dbh->pg_getresult();
+    $dbh->pg_exit_pipeline_mode();
+}
+
 cleanup_database($dbh,'test');
 $dbh->disconnect;

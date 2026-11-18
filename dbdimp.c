@@ -5136,6 +5136,24 @@ SV * pg_db_getresult (SV * dbh)
     (void)hv_stores(hv, "nfields", newSViv(nfields));
     (void)hv_stores(hv, "cmdtuples", newSVpv(cmdtuples, 0));
 
+    if (nfields > 0) {
+        AV *names = newAV();
+        AV *types = newAV();
+        int c;
+        for (c = 0; c < nfields; c++) {
+            SV *name;
+            TRACE_PQFNAME;
+            name = newSVpv(PQfname(result, c), 0);
+            if (imp_dbh->pg_utf8_flag)
+                SvUTF8_on(name);
+            av_push(names, name);
+            TRACE_PQFTYPE;
+            av_push(types, newSVuv((UV)PQftype(result, c)));
+        }
+        (void)hv_stores(hv, "names", newRV_noinc((SV *)names));
+        (void)hv_stores(hv, "types", newRV_noinc((SV *)types));
+    }
+
     /* For TUPLES_OK, extract row data */
     if (PGRES_TUPLES_OK == status && ntuples > 0) {
         AV * rows = newAV();

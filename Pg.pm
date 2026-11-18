@@ -4658,6 +4658,8 @@ The hashref contains:
   error     - error message string, or undef
   ntuples   - number of rows (for SELECT results)
   nfields   - number of columns
+  names     - arrayref of column names (when fields are present)
+  types     - arrayref of PostgreSQL type OIDs (when fields are present)
   cmdtuples - affected row count string (for DML)
   rows      - arrayref of arrayrefs (only present for SELECT results)
 
