@@ -1,6 +1,10 @@
 #!perl
 
 ## Spell check as much as we can
+## Reference: https://metacpan.org/pod/Text::SpellChecker
+## Reference: https://metacpan.org/pod/Pod::Spell
+## Reference: https://metacpan.org/pod/File::Comments
+## Reference: https://metacpan.org/pod/File::Comments::Plugin::C
 
 use 5.008001;
 use strict;
@@ -18,10 +22,12 @@ elsif (!eval { require Text::SpellChecker; 1 }) {
     plan skip_all => 'Could not find Text::SpellChecker'; ## nospellcheck
 }
 else {
+    plan tests => 65;
+
     opendir my $dir, 't' or die qq{Could not open directory 't': $!\n};
-    @testfiles = map { "t/$_" } grep { ! /spellcheck|lint/ } grep { /^.+\.(t|pl)$/ } readdir $dir;
+    @testfiles = map { "t/$_" } grep { ! /spellcheck|lint/ } grep { /^[\w\d].+\.(t|pl)$/ } readdir $dir;
     rewinddir $dir;
-    @alltestfiles = map { "t/$_" } grep { /^.+\.(t|pl)$/ } readdir $dir;
+    @alltestfiles = map { "t/$_" } grep { /^[\w\d].+\.(t|pl)$/ } readdir $dir;
     closedir $dir or die qq{Could not closedir "$dir": $!\n};
 }
 
@@ -116,7 +122,7 @@ for my $file (@alltestfiles) {
 }
 
 ## The plain ol' textfiles
-for my $file (qw/README Changes TODO README.dev README.win32 CONTRIBUTING.md/) {
+for my $file (qw/README Changes README.dev README.win32 CONTRIBUTING.md/) {
 
     if (!open $fh, '<', $file) {
         fail (qq{Could not find the file "$file"!});
@@ -184,15 +190,9 @@ SKIP: {
 
     my $fc = File::Comments->new();
 
-    my @files;
-    for (sort @testfiles) {
-        push @files, "$_";
-    }
-
-
     for my $file (@testfiles, qw{Makefile.PL Pg.xs Pg.pm lib/Bundle/DBD/Pg.pm
         dbdimp.c dbdimp.h quote.c quote.h Pg.h types.h dbdpg_test_postgres_versions.pl}) {
-        ## Tests as well?
+
         if (! -e $file) {
             fail (qq{Could not find the file "$file"!});
         }
@@ -209,9 +209,7 @@ SKIP: {
 
 }
 
-
-done_testing();
-
+exit;
 
 __DATA__
 ## These words are okay
@@ -295,7 +293,6 @@ CMD
 cmd
 cmdtaglist
 cmp
-compat
 CompatMode
 conf
 config
@@ -398,6 +395,7 @@ dr
 drh
 drnoble
 DRV
+dryrun
 DSN
 dTHX
 dv
@@ -419,6 +417,7 @@ ENV
 ErrCount
 errorlevel
 errstr
+ERRSTR
 estring
 eval
 exe
@@ -435,6 +434,7 @@ fh
 filename
 firstword
 fk
+flushstatus
 FreeBSD
 fulltest
 func
@@ -474,6 +474,7 @@ hstore
 html
 http
 https
+ident
 ifdefs
 implementor
 InactiveDestroy
@@ -493,6 +494,7 @@ IP
 IRC
 irc
 ish
+issuecomment
 ITHREADS
 jmore
 json
@@ -531,7 +533,6 @@ lotest
 lpq
 lseg
 LSEG
-lsegs
 lssl
 lt
 mak
@@ -565,17 +566,19 @@ MYMETA
 myperl
 myval
 Compiled
-ndone
+NaN
 ne
 ness
 netstat
 newfh
+newlocale
 newSVpv
 Newz
 nfields
 nmake
 nntp
 nohead
+NOLINT
 nonliteral
 nopause
 noprefix
@@ -585,6 +588,8 @@ NOSUCH
 ntuples
 Server
 nullable
+NUL
+NULs
 NULLABLE
 NULLs
 num
@@ -685,6 +690,7 @@ PQoids
 PQpipelineStatus
 PQprepare
 PQprotocolVersion
+PQputCopyEnd
 PQresultErrorField
 PQsend
 PQsendPrepare
@@ -693,6 +699,7 @@ PQsendQueryParams
 PQsendQueryPrepared
 PQserverVersion
 PQsetErrorVerbosity
+PQsetnonblocking
 PQsetSingleRowMode
 PQstatus
 pqtype
@@ -709,6 +716,8 @@ prereqs
 PrintError
 printf
 PrintWarn
+proc
+procfile
 profiler
 PROGRA
 projdisplay
@@ -733,6 +742,7 @@ RDBMS
 README
 ReadOnly
 realclean
+realloc
 recv'd
 RedHat
 Refactor
@@ -755,6 +765,7 @@ RowCacheSize
 RowsInCache
 rowtypes
 Sabino
+Safefree
 safemalloc
 sandia
 savepoint
@@ -796,6 +807,7 @@ src
 ss
 SSL
 sslmode
+sslrootcert
 starslash
 StartTransactionCommand
 stderr
@@ -803,6 +815,7 @@ STDERR
 STDIN
 STDOUT
 sth
+strbuf
 strcmp
 strcpy
 strdup
@@ -816,6 +829,7 @@ strncpy
 strtod
 struct
 structs
+su
 subdirectory
 submitnews
 substr
@@ -865,6 +879,7 @@ TODO
 topav
 topdollar
 TraceLevel
+tRu
 TSQUERY
 tty
 tuple
@@ -971,5 +986,4 @@ XSubPPtmpAAAA
 xxh
 yaml
 YAML
-YAMLiciousness
 yml

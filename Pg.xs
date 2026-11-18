@@ -9,13 +9,20 @@
 
 */
 
-#define NEED_newSVpvn_flags
-
 #include "Pg.h"
 
 #ifdef _MSC_VER
 #define strncasecmp(a,b,c) _strnicmp((a),(b),(c))
 #endif
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wundef"
+#pragma GCC diagnostic ignored "-Wunknown-pragmas"
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wundef"
+#pragma clang diagnostic ignored "-Wunused-macros"
+
+#define NEED_newSVpvn_flags
 
 MODULE = DBD::Pg    PACKAGE = DBD::Pg
 
@@ -121,8 +128,8 @@ constant(name=Nullch)
     PG_NUMRANGE                       = 3906
     PG_NUMRANGEARRAY                  = 3907
     PG_OID                            = 26
-    PG_OID8                           = 8256
-    PG_OID8ARRAY                      = 8261
+    PG_OID8                           = 6437
+    PG_OID8ARRAY                      = 6442
     PG_OIDARRAY                       = 1028
     PG_OIDVECTOR                      = 30
     PG_OIDVECTORARRAY                 = 1013
@@ -161,8 +168,8 @@ constant(name=Nullch)
     PG_REGCOLLATIONARRAY              = 4192
     PG_REGCONFIG                      = 3734
     PG_REGCONFIGARRAY                 = 3735
-    PG_REGDATABASE                    = 8326
-    PG_REGDATABASEARRAY               = 8327
+    PG_REGDATABASE                    = 6490
+    PG_REGDATABASEARRAY               = 6491
     PG_REGDICTIONARY                  = 3769
     PG_REGDICTIONARYARRAY             = 3770
     PG_REGNAMESPACE                   = 4089
@@ -552,6 +559,7 @@ pg_lo_lseek(dbh, fd, offset, whence)
     ALIAS:
         pg_lo_lseek64 = 1
     CODE:
+        PERL_UNUSED_VAR(ix);
         const IV ret = pg_db_lo_lseek(dbh, fd, offset, whence);
         ST(0) = (ret >= 0) ? sv_2mortal(newSViv(ret)) : &PL_sv_undef;
 
@@ -562,6 +570,7 @@ pg_lo_tell(dbh, fd)
     ALIAS:
         pg_lo_tell64 = 1
     CODE:
+        PERL_UNUSED_VAR(ix);
         const IV ret = pg_db_lo_tell(dbh, fd);
         ST(0) = (ret >= 0) ? sv_2mortal(newSViv(ret)) : &PL_sv_undef;
 
@@ -573,6 +582,7 @@ pg_lo_truncate(dbh, fd, len)
     ALIAS:
         pg_lo_truncate64 = 1
     CODE:
+        PERL_UNUSED_VAR(ix);
         const IV ret = pg_db_lo_truncate(dbh, fd, len);
         ST(0) = (ret >= 0) ? sv_2mortal(newSViv(ret)) : &PL_sv_undef;
 
@@ -757,7 +767,7 @@ pg_getline(dbh, buf, len)
         buf = SvGROW(bufsv, 3);
         if (len > 3)
             buf = SvGROW(bufsv, len);
-        ret = pg_db_getline(dbh, bufsv, (int)len);
+        ret = pg_db_getline(dbh, bufsv);
         sv_setpv((SV*)ST(1), buf);
         SvSETMAGIC(ST(1));
         ST(0) = (-1 != ret) ? &PL_sv_yes : &PL_sv_no;
@@ -786,7 +796,17 @@ pg_putcopydata(dbh, dataline)
         SV * dbh
         SV * dataline
     CODE:
-        RETVAL = pg_db_putcopydata(dbh, dataline);
+        RETVAL = pg_db_putcopydata(dbh, dataline, 0);
+    OUTPUT:
+        RETVAL
+
+I32
+pg_putcopydata_async(dbh, dataline)
+    INPUT:
+        SV * dbh
+        SV * dataline
+    CODE:
+        RETVAL = pg_db_putcopydata(dbh, dataline, 1);
     OUTPUT:
         RETVAL
 
@@ -892,6 +912,15 @@ pg_send_flush_request(dbh)
         RETVAL
 
 I32
+pg_putcopyend_async(dbh)
+    INPUT:
+        SV * dbh
+    CODE:
+        RETVAL = pg_db_putcopyend_async(dbh);
+    OUTPUT:
+        RETVAL
+
+I32
 pg_flush(dbh)
     INPUT:
         SV * dbh
@@ -914,7 +943,7 @@ getline(dbh, buf, len)
         buf = SvGROW(bufsv, 3);
         if (len > 3)
             buf = SvGROW(bufsv, len);
-        ret = pg_db_getline(dbh, bufsv, (int)len);
+        ret = pg_db_getline(dbh, bufsv);
         sv_setpv((SV*)ST(1), buf);
         SvSETMAGIC(ST(1));
         ST(0) = (-1 != ret) ? &PL_sv_yes : &PL_sv_no;

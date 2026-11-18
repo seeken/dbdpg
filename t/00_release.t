@@ -1,20 +1,45 @@
 #!perl
 
+## Pre-release checks
+## Verify the META.yml and META.json files are valid
 ## Make sure the version number is consistent in all places
 ## Check on the format of the Changes file
+## Reference: https://metacpan.org/pod/Test::CPAN::Meta::YAML
+## Reference: https://metacpan.org/pod/Test::CPAN::Meta::JSON
 
-use 5.010;
+use 5.008001;
 use strict;
 use warnings;
-use lib 'blib/lib', 'blib/arch', 't';
-use Data::Dumper;
 use Test::More;
-use feature 'unicode_strings';
 
 if (! $ENV{RELEASE_TESTING}) {
     plan (skip_all =>  'Test skipped unless environment variable RELEASE_TESTING is set');
 }
-plan tests => 3;
+plan tests => 7;
+
+eval {
+  require Test::CPAN::Meta::YAML;
+};
+if ($@) {
+    SKIP: {
+        skip ('Skipping Test::CPAN::Meta::YAML tests: module not found', 2);
+    }
+}
+else {
+   Test::CPAN::Meta::YAML::meta_spec_ok();
+}
+
+eval {
+    require Test::CPAN::Meta::JSON;
+};
+if ($@) {
+    SKIP: {
+        skip ('Skipping Test::CPAN::Meta::JSON tests: module not found', 2);
+    }
+}
+else {
+   Test::CPAN::Meta::JSON::meta_spec_ok();
+}
 
 my $vre = qr{([0-9]+\.[0-9]+\.[0-9]+\_?[0-9]*)};
 
@@ -140,7 +165,7 @@ $. = 0;
 while (<$fh>) {
     chomp;
     next if ! /\w/;
-    next if /^RT refers to/;
+    next if /found by using/;
     next if /^Version [0-9]+\.[0-9]+/;
     next if /^Version \?\?/;
     next if /SYSTEM VIEW/;
@@ -197,7 +222,6 @@ while (<$fh>) {
 
 }
 
-
 close $fh;
 
 if ($changes_file_ok) {
@@ -207,7 +231,4 @@ else {
     fail (q{The 'Changes' file does not have the correct format});
 }
 
-
-
 exit;
-

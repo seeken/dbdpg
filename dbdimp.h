@@ -2,7 +2,7 @@
     Copyright (c) 2000-2026 Greg Sabino Mullane and others: see the Changes file
     Portions Copyright (c) 1997-2000 Edmund Mergl
     Portions Copyright (c) 1994-1997 Tim Bunce
-    
+
     You may distribute under the terms of either the GNU General Public
     License or the Artistic License, as specified in the Perl README file.
 */
@@ -23,6 +23,7 @@ struct imp_dbh_st {
     int     copystate;         /* 0=none PGRES_COPY_IN PGRES_COPY_OUT */
     bool    copybinary;        /* whether the copy is in binary format */
     int     pipeline;          /* 0=off, tracks PQpipelineStatus */
+    bool    copy_nonblocking;  /* whether PQsetnonblocking was enabled for async COPY */
     int     pg_errorlevel;     /* PQsetErrorVerbosity. Set by user, defaults to 1 */
     bool    server_prepare;    /* do we want to use PQexecPrepared? Can be changed by user */
     int     switch_prepared;   /* how many executes until we switch to PQexecPrepared */
@@ -50,21 +51,11 @@ struct imp_dbh_st {
     bool    client_encoding_utf8; /* is the client_encoding utf8 last we checked? */
 
     PGresult  *last_result;     /* PGresult structure from the last executed query (can be from imp_dbh or imp_sth) */
-    bool      result_clearable; /* Is it alright to call PQclear on last_result? (statements handles set it to false */
+    bool      result_shared;    /* Is more than one thing pointing to this PGresult? */
     imp_sth_t *do_tmp_sth;      /* temporary sth to refer inside a do() call */
 };
 
-
-/* Each statement is broken up into segments */
-struct seg_st {
-    char *segment;          /* non-placeholder string segment */
-    int placeholder;        /* which placeholder this points to, 0=none */
-    struct ph_st *ph;       /* points to the relevant ph structure */
-    struct seg_st *nextseg; /* linked lists are fun */
-};
-typedef struct seg_st seg_t;
-
-/* The placeholders are also a linked list */
+/* The placeholder structure. Used as array elements in the ph_array_t structure */
 struct ph_st {
     char  *fooname;             /* name if using :foo style */
     char  *value;               /* the literal passed-in value, may be binary */
@@ -76,11 +67,34 @@ struct ph_st {
     bool   iscurrent;           /* do we want to use a literal CURRENT_TIMESTAMP? */
     bool   isdefault;           /* are we passing a literal 'DEFAULT'? */
     bool   isinout;             /* is this a bind_param_inout value? */
-    SV     *inout;              /* what variable we are updating via inout magic */
+    SV     *inout;              /* what variable we are updating via inout magic (do not Safefree!) */
     sql_type_info_t* bind_type; /* type information for this placeholder */
-    struct ph_st *nextph;       /* more linked list goodness */
 };
 typedef struct ph_st ph_t;
+
+/* The array container for the placeholders */
+struct ph_array_st {
+    int length;   /* length of the array */
+    int elements; /* num of elements in the array */
+    ph_t *array;     /* the array of placeholders */
+};
+typedef struct ph_array_st ph_array_t;
+
+/* Each statement is broken up into segments */
+struct seg_st {
+    char *segment;          /* non-placeholder string segment */
+    int placeholder;        /* which placeholder this points to, 0=none */
+};
+typedef struct seg_st seg_t;
+
+/* The array container for the segments */
+struct seg_array_st {
+    int length;
+    int elements;
+    seg_t *array;
+};
+typedef struct seg_array_st seg_array_t;
+
 
 typedef enum
     {
@@ -119,8 +133,8 @@ struct imp_sth_st {
     PGresult  *result;       /* result structure from the executed query */
     sql_type_info_t **type_info; /* type of each column in result */
 
-    seg_t  *seg;             /* linked list of segments */
-    ph_t   *ph;              /* linked list of placeholders */
+    ph_array_t ph_array;     /* array of placeholders */
+    seg_array_t seg_array;   /* array of segments */
 
     bool   prepare_now;      /* prepare this statement right away, even if it has placeholders */
     bool   prepared_by_us;   /* false if {prepare_name} set directly */
@@ -212,7 +226,7 @@ SV* dbd_st_canonical_ids(SV *sth, imp_sth_t *imp_sth);
 SV* dbd_st_canonical_names(SV *sth, imp_sth_t *imp_sth);
 
 
-/* 
+/*
    Everything else should map back to the DBI version, or be handled by Pg.pm
    TODO: Explicitly map out each one.
 */
@@ -232,13 +246,17 @@ long pg_quickexec (SV *dbh, const char *sql, const int asyncflag);
 
 int pg_db_putline (SV *dbh, SV *svbuf);
 
-int pg_db_getline (SV *dbh, SV * svbuf, int length);
+int pg_db_getline (SV *dbh, SV * svbuf);
 
 int pg_db_getcopydata (SV *dbh, SV * dataline, int async);
 
-int pg_db_putcopydata (SV *dbh, SV * dataline);
+int pg_db_putcopydata (SV *dbh, SV * dataline, int async);
 
 int pg_db_putcopyend (SV * dbh);
+
+int pg_db_putcopyend_async (SV * dbh);
+
+int pg_db_flush (SV * dbh);
 
 int pg_db_endcopy (SV * dbh);
 
@@ -252,7 +270,6 @@ int pg_db_send_query_params (SV *dbh, char *sql, AV *params);
 int pg_db_send_query_prepared (SV *dbh, char *name, AV *params);
 int pg_db_send_prepare (SV *dbh, char *name, char *sql);
 int pg_db_send_flush_request (SV *dbh);
-int pg_db_flush (SV *dbh);
 
 SV * pg_db_error_field (SV *dbh, char * fieldname);
 

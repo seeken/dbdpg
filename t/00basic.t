@@ -1,7 +1,8 @@
 #!perl
 
-## Simply test that we can load the DBI and DBD::Pg modules,
-## and that the latter gives a good version
+## Simply test that we can load the DBI and DBD::Pg modules
+## If either fails, we bail out of all testing
+## Check that DBD::Pg gives a sane VERSION number
 
 use 5.008001;
 use strict;
@@ -23,7 +24,7 @@ BEGIN {
         my $fh;
         if (open $fh, '<', $file) { ## no critic (CompileTime)
             { local $/; $_ = <$fh>; }
-            close $fh or die qq{Could not close file "$file" $!\n}; ## no critic (CompileTime) 
+            close $fh or die qq{Could not close file "$file" $!\n}; ## no critic (CompileTime)
             for my $keyword (qw/ CCFLAGS INC LIBS /) {
                 if (/^#\s+$keyword => (.+)/m) {
                     diag "$keyword: $1";

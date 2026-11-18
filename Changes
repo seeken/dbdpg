@@ -1,6 +1,133 @@
 Changes for the DBD::Pg module
 
-RT refers to rt.cpan.org
+RT items can be found by using: https://rt.cpan.org/Public/Bug/Display.html?id=XXX
+Github items can be found by using: https://github.com/bucardo/dbdpg/issues/XXX
+
+Version 3.22.0  (unreleased)
+
+ - Set async_sth to NULL on early return branches in dbd_st_destroy.
+   [Chad Granum]
+
+ - Stricter checking that attribute argument expecting a reference are actually a reference.
+   [Ed Sabol, Leon Timmermans]
+
+ - Fix MinGW compilation errors for Strawberry Perl
+   [Ed Sabol]
+
+ - Allow $dbh->data_sources('Pg') to work by removing the 'Pg' argument.
+   Support arguments to both DBI->data_sources and $dbh->data_sources
+     to be strings or hashrefs.
+   Always show the port in the output.
+   [Greg Sabino Mullane]
+
+ - Add new env DBDPG_CLANGDEBUG for advanced clang debugging
+   [Greg Sabino Mullane]
+
+ - Do not set array_nulls in tests if Postgres >= 20
+   [Greg Sabino Mullane]
+
+Version 3.21.2  (released August 26, 2026)
+
+ - In the tests, ensure the plan declaration happens after the skip_all calls.
+   [Russell Jenkins]
+
+ - Fix missing closing double-quote in su -c commands in test setup script.
+   [Jitka Plesnikova]
+
+ - Support compiling with versions of GCC < 5.
+   [Ed Sabol]
+
+ - Make port discovery more robust in test setup script.
+   [Ed Sabol, Greg Sabino Mullane]
+
+ - Avoid using getpwent and compare uid values instead in test setup script.
+   [Ed Sabol]
+
+
+Version 3.21.1  (released August 23, 2026)
+
+ - Fix incorrect allocation inside of quote_float()
+   Check for NUL more carefully inside of  _dequote_bytea_hex()
+   Fix incorrect allocation inside of pg_destringify_array()
+   [CVE: https://nvd.nist.gov/vuln/detail/CVE-2026-78183]
+   [Greg Sabino Mullane]
+
+ - Make tests much less verbose; only failed tests need to give details.
+   [Greg Sabino Mullane]
+
+
+Version 3.21.0  (released August 22, 2026)
+
+ - Add non-blocking async COPY FROM support (pg_putcopydata_async, pg_putcopyend_async, pg_flush)
+   (Github issue #177, pull request #176)
+   [John Napiorkowski, Ed Sabol]
+
+ - Ensure $sth->rows() returns 0 when no rows returned for updates, deletes,
+     or inserts with ON CONFLICT DO NOTHING
+   [Greg Sabino Mullane, reported by Yiannis]
+   (Github issue #194, pull request #194)
+
+ - Fix incorrect quoting of float string values (e.g. 'NaN')
+   [Greg Sabino Mullane]
+
+ - Fix a memory leak in the PQclosePrepared cleanup path
+   [Rorsarach]
+   (Github issue #187, pull request #188)
+
+ - Fix a memory leak when bind_param called, and some around statement handles.
+   [Greg Sabino Mullane]
+
+ - Implement new string buffer system for statements and placeholders.
+   This replaces the old linked lists with arrays, and is much faster.
+   [Matt Tyson, Greg Sabino Mullane]
+   (Github pull requests #21 and #201)
+
+ - Cleanup and refactor code in quote.c. Rename internal functions.
+   Standardize and change error messages.
+   [Greg Sabino Mullane]
+
+ - Improve and add tests for PQclear logic in dbdimp.c
+   [Greg Sabino Mullane]
+
+ - Support whitespace in directory names for the test suite.
+   [Greg Sabino Mullane]
+
+ - Many tweaks to support building and testing on Win32
+   [Greg Sabino Mullane]
+
+
+Version 3.20.2  (released May 1, 2026)
+
+ - Fix incorrect path separator which may impede Mac compilation.
+   [Ed Sabol, reported by Éric Cholet]
+   (Github pull request #191)
+
+
+Version 3.20.1  (released April 30, 2026)
+
+ - Set imp_dbh->async_sth when a prepare is successfully sent from pg_st_prepare_statement
+   Don't execute "result auto-retrieve" code for a successful async prepare
+   Increment imp_dbh->prepare_number when success of an async prepare is detected in handle_old_async
+   [Rainer Weikusat, reported by Michael Kröll]
+   (Github issue #183, pull request #184)
+
+ - Fix hangup of queries like "COPY TO STDOUT" in async mode
+   [Ed Sabol, Alexander Gorlov]
+   (Github issue #98, pull request #101 and #163)
+
+ - Improve documentation about sslmode options
+   [Ed Sabol, reported by Alexander Karelas]
+   (Github issue #180, pull request #186)
+
+ - Drop ExtUtils::MakeMaker requirement back to 6.58, but recommend 7.64
+   [Greg Sabino Mullane, Ed Sabol, reported by Peter Tribble]
+   (Github issue #170)
+
+ - Shorten path for test database to reduce OS errors
+   [Greg Sabino Mullane, Ed Sabol, reported by Gianni Ceccarelli and Peter Dyballa]
+   (Github issue #78 and #185)
+   (RT ticket #157598)
+
 
 Version 3.20.0  (released March 19, 2026)
 
@@ -18,7 +145,7 @@ Version 3.20.0  (released March 19, 2026)
    (Github pull request #167)
 
  - Fix failing test due to localized error messages.
-   [Ed Sabol]
+   [Ed Sabol, reported by Slaven Rezić]
    (Github issue #169)
    (Github pull request #164)
 
@@ -29,6 +156,7 @@ Version 3.20.0  (released March 19, 2026)
 
  - Cleanup and improve the primary_key_info() function.
    [Greg Sabino Mullane]
+   (Github pull request #175)
 
 
 Version 3.19.0  (released March 14, 2026)

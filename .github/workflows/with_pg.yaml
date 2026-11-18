@@ -18,6 +18,15 @@ jobs:
       matrix:
         perl: [ '5.30', '5.36', '5.40', 'latest' ]
         postgres: [ '11', '13', '15', '17', 'latest' ]
+        compiler: [ 'gcc' ]
+        include:
+          # Add extra jobs for building with clang
+          - perl: 'latest'
+            postgres: 'latest'
+            compiler: 'clang'
+          - perl: '5.40'
+            postgres: '15'
+            compiler: 'clang'
 
     services:
       postgreshost:
@@ -32,12 +41,11 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-
     runs-on: ubuntu-latest
     container: perl:${{ matrix.perl }}
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Show Perl Version
       run: |
@@ -47,6 +55,7 @@ jobs:
       run: |
         apt-get update
         apt-get install -y libaspell-dev
+        if [ "${{ matrix.compiler }}" = "clang" ]; then apt-get install -y clang; fi
 
     - name: Install Modules
       run: |
@@ -54,14 +63,22 @@ jobs:
         cpanm --installdeps --notest .
         cpanm --notest Perl::Critic Text::SpellChecker
 
-    - name: Show Errors on Ubuntu
-      if:  ${{ failure() && startsWith( matrix.runner, 'ubuntu-')}}
+    - name: Show Errors
+      if: failure()
       run: |
-         cat /home/runner/.cpanm/work/*/build.log
+        ls -la "${HOME}/.cpanm/work/" || true
+        cat "${HOME}/.cpanm/work/"*/build.log || true
 
     - name: Run make
       run: |
-        perl Makefile.PL
+        # Conditionally override the compiler for ExtUtils::MakeMaker
+        if [ "${{ matrix.compiler }}" = "clang" ]; then
+          clang --version
+          perl Makefile.PL CC=clang LD=clang OPTIMIZE="$(perl -MConfig -e 'print $Config{optimize}') -Werror"
+        else
+          gcc --version
+          perl Makefile.PL OPTIMIZE="$(perl -MConfig -e 'print $Config{optimize}') -Werror"
+        fi
         make
 
     - name: Run tests
@@ -74,4 +91,42 @@ jobs:
       run: |
         make test
 
+  # Extra job that forces the initdb path (covers the GETHANDLE / last GETHANDLE
+  # code exercised when no pre-existing server is available). This is the path
+  # that broke under Perl 5.44 (see PR #220 / Debian bug #1151887).
+  test-initdb:
+    name: test initdb path (latest, latest, gcc)
+    runs-on: ubuntu-latest
+    container: perl:latest
 
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Show Perl Version
+      run: |
+        perl -v
+
+    - name: Install non-perl dependencies
+      run: |
+        apt-get update
+        apt-get install -y postgresql postgresql-client libaspell-dev
+
+    - name: Install Modules
+      run: |
+        cpanm --installdeps --notest .
+        cpanm --notest Perl::Critic Text::SpellChecker
+
+    - name: Run make
+      run: |
+        gcc --version
+        perl Makefile.PL OPTIMIZE="$(perl -MConfig -e 'print $Config{optimize}') -Werror"
+        make
+
+    - name: Run tests (forced initdb path)
+      env:
+        AUTHOR_TESTING: 1
+        RELEASE_TESTING: 1
+        DBDPG_TESTINITDB: 1          # force the INITDB path
+        # deliberately omit DBI_DSN/DBI_USER so the harness will create a cluster
+      run: |
+        make test

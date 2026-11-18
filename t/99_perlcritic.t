@@ -2,6 +2,7 @@
 
 ## Run Perl::Critic against the source code and the tests
 ## This is highly customized, so take with a grain of salt
+## Reference: https://metacpan.org/pod/Perl::Critic
 
 use 5.008001;
 use strict;
@@ -18,10 +19,11 @@ elsif (!eval { require Perl::Critic; 1 }) {
 elsif ($Perl::Critic::VERSION < 0.23) {
     plan skip_all => 'Perl::Critic must be version 0.23 or higher';
 }
+plan tests => 30;
 
 $ENV{LANG} = 'C';
 opendir my $dir, 't' or die qq{Could not open directory 't': $!\n};
-my @testfiles = map { "t/$_" } grep { /^.+\.(t|pl)$/ } readdir $dir;
+my @testfiles = map { "t/$_" } grep { /^[\w\d].+\.(t|pl)$/ } readdir $dir;
 closedir $dir or die qq{Could not closedir "$dir": $!\n};
 
 ## Check some non-test files
@@ -152,5 +154,4 @@ for my $filename (sort @testfiles) {
 
 pass ('Finished Perl::Critic testing');
 
-done_testing();
 

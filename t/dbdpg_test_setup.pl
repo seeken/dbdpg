@@ -1,5 +1,8 @@
 ## Helper file for the DBD::Pg tests
 
+## Reference: https://metacpan.org/pod/Win32::Process
+## Reference: https://metacpan.org/pod/File::Path
+
 use strict;
 use warnings;
 use lib 'blib/lib', 'blib/arch'; ## no critic
@@ -16,6 +19,13 @@ my $superuser = 1;
 my $TEST_PORT_MIN = 5442;
 my $TEST_PORT_MAX = 5542;
 
+if ($^O =~ /Win32/ and !eval { require Win32::Process; 1 }) {
+    Test::More::diag("\n\n");
+    Test::More::BAIL_OUT("Running tests on Win32 requires the Win32::Process module\n\n");
+    exit;
+}
+
+my $logfile = 'dbdpg_test.logfile';
 
 my $testfh;
 if (exists $ENV{TEST_OUTPUT}) {
@@ -59,6 +69,7 @@ my @tables =
      'dbd_pg_test',
      'dbd_pg_test_geom',
      'dbd_pg_test_pipeline',
+     'dbd_pg_test_async_copy',
      );
 
 my @sequences =
@@ -184,29 +195,32 @@ version: $version
                         return $helpconnect, '', undef;
                     }
 
-                    warn "Restarting test database $testdsn at $testdir\n";
-                    if ($^O !~ /Win32/) {
-                        my $sockdir = "$testdir/data/socket";
-                        if (! -e $sockdir) {
-                            mkdir $sockdir;
-                            if ($uid) {
-                                if (! chown $uid, -1, $sockdir) {
-                                    warn "chown of $sockdir failed!\n";
-                                }
-                            }
+                    Test::More::diag("Restarting test database $testdsn at $testdir");
+                    my $COM = $su ?
+                        build_command(q{su TESTUSER -m -c "PG_CTL -o '-k TESTDIR' -l LOGFILE -D DATADIR start"},
+                                      [$su, $pg_ctl, $testdir, "$testdir/$logfile", "$testdir/data"], 'backslash_spaces')
+                        : build_command(q{PG_CTL -o '-k TESTDIR' -l LOGFILE -D DATADIR start},
+                                        [$pg_ctl, $testdir, "$testdir/$logfile", "$testdir/data"]);
+                    $su and chdir $testdir;
+                    eval {
+                        if ($^O =~ /Win32/) {
+                            Win32::Process::Create(
+                                my $proc,
+                                $pg_ctl,
+                                $COM,
+                                0,
+                                Win32::Process::NORMAL_PRIORITY_CLASS() | Win32::Process::CREATE_NO_WINDOW(),
+                                '.'
+                                );
                         }
-                    }
-                    my $COM = qq{$pg_ctl -o '-k $testdir/data/socket' -l $testdir/dbdpg_test.logfile -D $testdir/data start};
-                    if ($su) {
-                        $COM = qq{su -m $su -c "$COM"};
-                        chdir $testdir;
-                    }
-                    $info = '';
-                    eval { $info = qx{$COM}; };
+                        else {
+                            system($COM);
+                        }
+                    };
                     my $err = $@;
                     $su and chdir $olddir;
-                    if ($info !~ /starting/ and ($err or $info !~ /\w/)) {
-                        $err = "Could not startup THIS new database (err=$err) ($info)";
+                    if ($err) {
+                        $err = "Could not startup new database (err=$err)";
                         return $helpconnect, $err, undef;
                     }
                     ## Wait for it to startup and verify the connection
@@ -247,20 +261,20 @@ version: $version
 
     if (! $testdsn) {
         $helpconnect = 1;
-        $testdsn = $^O =~ /Win32/ ? 'dbi:Pg:host=localhost' : 'dbi:Pg:dbname=postgres';
+        $testdsn = $^O =~ /Win32/ ? 'dbi:Pg:host=127.0.0.1' : 'dbi:Pg:dbname=postgres';
     }
     if (! $testuser) {
         $testuser = 'postgres';
     }
 
     ## From here on out, we don't return directly, but save it first
-  GETHANDLE: {
+  GETHANDLE_START:
         eval {
             $dbh = DBI->connect($testdsn, $testuser, $ENV{DBI_PASS},
                                 {RaiseError => 1, PrintError => 0, AutoCommit => 1});
         };
 
-        last GETHANDLE if ! $@; ## Made it!
+        goto GETHANDLE_END if ! $@; ## Made it!
         ## If the error was because of the user, try a few others
         if ($@ =~ /postgres/) {
 
@@ -277,7 +291,7 @@ version: $version
                 $dbh = DBI->connect($testdsn, $testuser, $ENV{DBI_PASS},
                                     {RaiseError => 1, PrintError => 0, AutoCommit => 1});
             };
-            last GETHANDLE if ! $@; ## Made it!
+            goto GETHANDLE_END if ! $@; ## Made it!
 
             ## Final user tweak: set to postgres for Beastie
             if ($testuser ne 'postgres') {
@@ -287,7 +301,7 @@ version: $version
                     $dbh = DBI->connect($testdsn, $testuser, $ENV{DBI_PASS},
                                         {RaiseError => 1, PrintError => 0, AutoCommit => 1});
                 };
-                last GETHANDLE if ! $@; ## Made it!
+                goto GETHANDLE_END if ! $@; ## Made it!
             }
         }
 
@@ -318,11 +332,10 @@ version: $version
 
         ## Make sure initdb exists and is working properly
         $ENV{LANG} = 'C';
+        my $initcom = build_command('INITDB --version 2>&1', [$initdb]);
         $info = '';
-        eval {
-            $info = qx{$initdb --version 2>&1};
-        };
-        last GETHANDLE if $@; ## Fail - initdb bad
+        eval { $info = qx{$initcom}; };
+        goto GETHANDLE_END if $@; ## Fail - initdb bad
         $version = 0;
         if (!defined $info or ($info !~ /Postgres|EnterpriseDB/i and $info !~ /run as root/)) {
             if (defined $info) {
@@ -339,7 +352,7 @@ version: $version
                 $msg .= " Final call was: $initdb";
                 $@ = $msg;
             }
-            last GETHANDLE; ## Fail - initdb bad
+            goto GETHANDLE_END; ## Fail - initdb bad
         }
         elsif ($info =~ /([0-9]+)(?:devel|beta|rc|alpha)/) { ## Can be 10devel
             $version = $1;
@@ -355,26 +368,31 @@ version: $version
         if (! -e $pg_ctl) {
             $pg_ctl = 'pg_ctl';
         }
+        if ($^O =~ /Win32/) {
+            my $fullpath = qx{where $pg_ctl};
+            $fullpath = '' if !defined $fullpath;
+            $fullpath =~ s/\r?\n.*//s;  #  we only want the first result
+            $fullpath =~ /pg_ctl/ or die "Could not determine full path for pg_ctl on Win32!\n";
+            $pg_ctl = $fullpath;
+        }
+
+        my $pgctlcom = build_command('PGCTL --help 2>&1', [$pg_ctl]);
         $info = '';
-        eval {
-            $info = qx{$pg_ctl --help 2>&1};
-        };
-        last GETHANDLE if $@; ## Fail - pg_ctl bad
+        eval { $info = qx{$pgctlcom}; };
+        goto GETHANDLE_END if $@; ## Fail - pg_ctl bad
         if (!defined $info or ($info !~ /\@(?:[a-z.-]*?postgresql\.org|enterprisedb\.com)/ and $info !~ /run as root/)) {
             $@ = defined $initdb ? "Bad pg_ctl output: $info" : 'Bad pg_ctl output';
-            last GETHANDLE; ## Fail - pg_ctl bad
+            goto GETHANDLE_END; ## Fail - pg_ctl bad
         }
 
         ## initdb and pg_ctl seems to be available, let's use them to fire up a cluster
-        warn "Please wait, creating new Postgres cluster (version $version) for testing\n";
+        Test::More::diag "Please wait, creating new Postgres cluster (version $version) for testing\n";
         $info = '';
         my $locale = $ENV{DBDPG_TEST_LOCALE} || 'C';
-        eval {
-            my $com = "$initdb --locale=$locale -E UTF8 -D $testdir/data";
-            $debug and warn" Attempting: $com\n";
-            $info = qx{$com 2>&1};
-        };
-        last GETHANDLE if $@; ## Fail - initdb bad
+        my $initdbcom = build_command('INITDB --locale=LOCALE -E utf8 -D DATADIR 2>&1',
+                                      [$initdb, $locale, "$testdir/data"]);
+        eval { $info = qx{$initdbcom}; };
+        goto GETHANDLE_END if $@; ## Fail - initdb bad
 
         ## initdb and pg_ctl cannot be run as root, so let's handle that
         if ($info =~ /run as root/ or $info =~ /unprivilegierte/) {
@@ -398,8 +416,9 @@ version: $version
             my @userlist = (qw/postgres postgresql pgsql _postgres/);
 
             ## Start with whoever owns this file, unless it's us
-            my $username = getpwuid ((stat($0))[4]);
-            unshift @userlist, $username if defined $username and $username ne getpwent;
+            my $file_owner_uid = (stat($0))[4];
+            my $username = defined $file_owner_uid ? getpwuid($file_owner_uid) : undef;
+            unshift @userlist, $username if defined $username and $file_owner_uid != $<;
 
             my %doneuser;
             for (@userlist) {
@@ -412,30 +431,30 @@ version: $version
                 next unless chown $uid, -1, $readme;
                 $su = $testuser;
                 $founduser++;
-                $info = '';
                 $olddir = getcwd;
-                eval {
-                    chdir $testdir;
-                    $info = qx{su -m $testuser -c "/bin/sh -c '$initdb --locale=C -E UTF8 -D $testdir/data 2>&1'"};
-                };
+                my $sucom = build_command(q{su TESTUSER -m -c "/bin/sh -c 'INITDB --locale=C -E utf8 -D DATADIR 2>&1'"},
+                                          [$testuser, $initdb, "$testdir/data"], 'backslash_spaces');
+                chdir $testdir;
+                $info = '';
+                eval { $info = qx{$sucom}; };
                 my $err = $@;
                 chdir $olddir;
                 last if !$err;
             }
             if (!$founduser) {
                 $@ = 'Unable to find a user to run initdb as';
-                last GETHANDLE; ## Fail - no user
+                goto GETHANDLE_END; ## Fail - no user
             }
             if (! -e "$testdir/data") {
                 $@ = 'Could not create a test database via initdb';
-                last GETHANDLE; ## Fail - no datadir created
+                goto GETHANDLE_END; ## Fail - no datadir created
             }
             ## At this point, both $su and $testuser are set
         }
 
         if ($info =~ /FATAL/) {
             $@ = "initdb gave a FATAL error: $info";
-            last GETHANDLE; ## Fail - FATAL
+            goto GETHANDLE_END; ## Fail - FATAL
         }
 
         if ($info =~ /but is not empty/) {
@@ -443,7 +462,7 @@ version: $version
         }
         elsif ($info !~ /pg_ctl/) {
             $@ = "initdb did not give a pg_ctl string: $info";
-            last GETHANDLE; ## Fail - bad output
+            goto GETHANDLE_END; ## Fail - bad output
         }
 
         ## Which user do we connect as?
@@ -456,24 +475,22 @@ version: $version
         if ($version >= 10) {
             $resetxlog =~ s/pg_resetxlog/pg_resetwal/;
         }
-        eval {
-            if ($su) {
-                $info = qx{su -m "$testuser" -c "$resetxlog --help"};
-            }
-            else {
-                $info = qx{$resetxlog --help};
-            }
-        };
+        my $resetcom = $su ?
+            build_command('su TESTUSER -m -c "RESETXLOG --help"',
+                          [$testuser, $resetxlog], 'backslash_spaces')
+            : build_command('RESETXLOG --help',
+                            [$resetxlog]);
+        $info = '';
+        eval { $info = qx{$resetcom}; };
         if (! $@ and $info =~ /XID/) {
             if (! -e "$testdir/data/postmaster.pid") {
-                eval {
-                    if ($su) {
-                        $info = qx{ su -m "$testuser" -c "$resetxlog -o 2222333344 $testdir/data" };
-                    }
-                    else {
-                        $info = qx{ $resetxlog -o 2222333344 $testdir/data };
-                    }
-                };
+                $resetcom = $su ?
+                    build_command('su TESTUSER -m -c "RESETXLOG -o 2222333344 DATADIR"',
+                                  [$testuser, $resetxlog, "$testdir/data"], 'backslash_spaces')
+                    : build_command('RESETXLOG -o 2222333344 DATADIR',
+                                    [$resetxlog, "$testdir/data"]);
+                $info = '';
+                eval { $info = qx{$resetcom}; };
                 ## We don't really care if it worked or not!
             }
         }
@@ -483,26 +500,26 @@ version: $version
         $info = '';
         my $evalok = 0;
         eval {
-            $info = qx{ss -QanO 2>&1};
+            $info = $^O =~ /(?:Win32|darwin|bsd|dragonfly)/ ? qx{netstat -anp TCP 2>&1} : qx{ss -anO 2>&1};
             $evalok = 1;
         };
         if (!$evalok or ! defined $info) {
-            warn "ss call to determine open port failed, trying port $testport\n";
+            Test::More::diag "Unable to determine open port, trying port $testport\n";
         }
         else {
             {
-                last if $info !~ /:$testport /m;
+                last if $info !~ /^\s*tcp.+?(?:\d+\.\d+\.\d+\.\d+|\*)[:.]$testport\s/im;
                 last if ++$testport > $TEST_PORT_MAX;
                 redo;
             }
             if ($testport > $TEST_PORT_MAX) {
                 $@ = "No free ports found for testing: tried $TEST_PORT_MIN to $TEST_PORT_MAX\n";
-                last GETHANDLE; ## Fail - no free ports
+                goto GETHANDLE_END; ## Fail - no free ports
             }
         }
         $@ = '';
 
-        $debug and Test::More::diag "Port to use: $testport";
+        Test::More::diag "Port used for testing: $testport";
 
         my $conf = "$testdir/data/postgresql.conf";
         my $cfh;
@@ -526,72 +543,61 @@ version: $version
             if (! open $cfh, '>>', $conf) {
                 $@ = qq{Could not open "$conf": $!};
                 $debug and Test::More::diag qq{Failed to open "$conf"};
-                last GETHANDLE; ## Fail - no conf file
+                goto GETHANDLE_END; ## Fail - no conf file
             }
             $debug and Test::More::diag qq{Writing to "$conf"};
             print {$cfh} "\n\n## DBD::Pg testing parameters\n";
-            print {$cfh} "port=$testport\n";
-            print {$cfh} "max_connections=11\n";
-            print {$cfh} "log_statement = 'all'\n";
+            print {$cfh} "port                       = $testport\n";
+            print {$cfh} "max_connections            = 15\n";
+            print {$cfh} "log_statement              = 'all'\n";
             print {$cfh} "log_min_duration_statement = 0\n";
-            print {$cfh} "log_line_prefix = '%m [%p] '\n";
-            print {$cfh} "log_filename = 'postgres%Y-%m-%d.log'\n";
-            print {$cfh} "log_rotation_size = 0\n";
+            print {$cfh} "log_line_prefix            = '%m [%p] '\n";
+            print {$cfh} "log_filename               = 'postgres.log'\n";
+            print {$cfh} "log_rotation_size          = 0\n";
+
             if (8.1 == $version) {
-                print {$cfh} "redirect_stderr = on\n";
+                print {$cfh} "redirect_stderr            = on\n";
             }
 
             if ($version >= 8.3) {
-                print {$cfh} "logging_collector = on\n";
+                print {$cfh} "logging_collector          = on\n";
             }
 
-            if ($version >= 9.4) {
-                print {$cfh} "wal_level = logical\n";
-                print {$cfh} "max_replication_slots = 1\n";
-                print {$cfh} "max_wal_senders = 1\n";
-
-                open my $hba, '>>', "$testdir/data/pg_hba.conf"
-                    or die qq{Could not open "$testdir/data/pg_hba.conf": $!\n};
-
-                print {$hba} "local\treplication\tall\ttrust\n";
-                print {$hba} "host\treplication\tall\t127.0.0.1/32\ttrust\n";
-                print {$hba} "host\treplication\tall\t::1/128\ttrust\n";
-
-                close $hba or die qq{Could not close "$testdir/data/pg_hba.conf": $!\n};
+            if ($^O =~ /Win32/) {
+                print {$cfh} "listen_addresses           ='127.0.0.1'\n";
             }
 
-            print {$cfh} "listen_addresses='127.0.0.1'\n" if $^O =~ /Win32/;
             print {$cfh} "\n";
             close $cfh or die qq{Could not close "$conf": $!\n};
 
             ## Attempt to start up the test server
-            $info = '';
-            if ($^O !~ /Win32/) {
-                my $sockdir = "$testdir/data/socket";
-                if (! -e $sockdir) {
-                    mkdir $sockdir;
-                    if ($su) {
-                        if (! chown $uid, -1, $sockdir) {
-                            warn "chown of $sockdir failed!\n";
-                        }
-                    }
-                }
-            }
-            my $COM = qq{$pg_ctl -o '-k $testdir/data/socket' -l $testdir/dbdpg_test.logfile -D $testdir/data start};
+            my $COM = $su ?
+                build_command(q{su TESTUSER -m -c "PGCTL -o '-k TESTDIR' -l LOGFILE -D DATADIR start"},
+                              [$su, $pg_ctl, $testdir, "$testdir/$logfile", "$testdir/data"], 'backslash_spaces')
+                : build_command(q{PGCTL -o '-k TESTDIR' -l LOGFILE -D DATADIR start},
+                                [$pg_ctl, $testdir, "$testdir/$logfile", "$testdir/data"]);
             $olddir = getcwd;
-            if ($su) {
-                chdir $testdir;
-                $COM = qq{su -m $su -c "$COM"};
-            }
-            $debug and Test::More::diag qq{Running: $COM};
+            $su and chdir $testdir;
             eval {
-                $info = qx{$COM};
+                if ($^O =~ /Win32/) {
+                    Win32::Process::Create(
+                        my $proc,
+                        $pg_ctl,
+                        $COM,
+                        0,
+                        Win32::Process::NORMAL_PRIORITY_CLASS() | Win32::Process::CREATE_NO_WINDOW(),
+                        '.'
+                        );
+                }
+                else {
+                    system($COM);
+                }
             };
             my $err = $@;
             $su and chdir $olddir;
             if ($err) {
-                $@ = "Could not startup new database ($COM) ($err) ($info)";
-                last GETHANDLE; ## Fail - startup failed
+                $@ = "Could not startup new database ($COM) ($err)";
+                goto GETHANDLE_END; ## Fail - startup failed
             }
             sleep 1;
         }
@@ -599,10 +605,10 @@ version: $version
         ## Attempt to connect to this server
         $testdsn = "dbi:Pg:dbname=postgres;port=$testport";
         if ($^O =~ /Win32/) {
-            $testdsn .= ';host=localhost';
+            $testdsn .= ';host=127.0.0.1';
         }
         else {
-            $testdsn .= ";host=$testdir/data/socket";
+            $testdsn .= build_command(';host=TESTDIR', [$testdir], 'backslash_spaces');
         }
 
         $debug and Test::More::diag qq{Test DSN: $testdsn};
@@ -654,10 +660,10 @@ version: $version
                     redo STARTUP;
                 }
             }
-            last GETHANDLE; ## Made it!
+            goto GETHANDLE_END; ## Made it!
         }
 
-    } ## end of GETHANDLE
+    GETHANDLE_END:
 
     ## At this point, we've got a connection, or have failed
     ## Either way, we record for future runs
@@ -699,7 +705,7 @@ version: $version
         $dbh->do('SET client_encoding = utf8');
         $dbh->{pg_enable_utf8} = -1;
         ## Always want this on for consistent testing
-        if ($dbh->{pg_server_version} >= 80200) {
+        if ($dbh->{pg_server_version} >= 80200 and $dbh->{pg_server_version} < 200000) {
             $dbh->do('SET array_nulls = ON');
         }
     }
@@ -778,6 +784,56 @@ return $helpconnect, '', $dbh;
 } ## end of connect_database
 
 
+sub build_command {
+
+    ## Build a command to pass to the system, quoting as needed
+    my $string = shift;
+    my $args = shift;
+    my $effect = shift || '';
+    my $x = 0;
+
+    $string =~ s!([A-Z]{2}[A-Z_]+)!
+      {
+       my $var = $args->[$x++];
+       if (not defined $var) {
+         my $line = (caller)[2];
+         die "Invalid command string from line $line\n";
+       }
+       if ($var =~ /\s/) {
+           if ($effect eq 'backslash_spaces') {
+               $var =~ s/ /\\ /g;
+               $var;
+           }
+           else {
+               qq{"$var"};
+           }
+       }
+       else {
+           $var;
+       }
+      }
+      !gex;
+
+    ## Quick test to rule out shenanigans
+    (my $tempstring = $string) =~ s/ /SPACE/g;
+    if ($tempstring =~ /\s/) {
+        warn "Found non-space whitespace in command string: $tempstring\n";
+        Test::More::BAIL_OUT('Invalid whitespace found in command');
+        exit 1;
+    }
+
+    ## If this is Windows, do not specify a socket directory
+    if ($^O =~ /Win32/) {
+        $string =~ s/-o '-k .*?' -l/-l/;
+    }
+
+    my $debug = $ENV{DBDPG_DEBUG} || 0;
+    $debug and Test::More::diag "Built command: ($string)";
+
+    return $string;
+}
+
+
 sub is_super {
 
     return $superuser;
@@ -830,14 +886,19 @@ sub get_test_settings {
     if (!$testdir) {
         my $dir = getcwd();
         $testdir = exists $ENV{DBDPG_TEMPDIR} ?
-            File::Temp::tempdir("$ENV{DBDPG_TEMPDIR}/dbdpg_testdatabase_XXXXXX", CLEANUP => 0) :
-            "$dir/dbdpg_test_database";
+            File::Temp::tempdir("$ENV{DBDPG_TEMPDIR}/testdb_XXXXXX", CLEANUP => 0) :
+            "$dir/testdb";
     }
 
     ## Allow forcing of ENV variables
     if ($ENV{DBDPG_TEST_ALWAYS_ENV}) {
         $testdsn = $ENV{DBI_DSN} || '';
         $testuser = $ENV{DBI_USER} || '';
+    }
+
+    ## Allow using an existing port (no explicit host)
+    if (exists $ENV{DBDPG_TEST_PORT} and $ENV{DBDPG_TEST_PORT} =~ /^\d+$/) {
+        $testdsn = "dbi:Pg:dbname=postgres;port=$ENV{DBDPG_TEST_PORT}";
     }
 
     return $testdsn, $testuser, $helpconnect, $su, $uid, $testdir, $pg_ctl, $initdb, $error, $version;
@@ -944,15 +1005,14 @@ sub shutdown_test_database {
     my ($testdsn,$testuser,$helpconnect,$su,$uid,$testdir,$pg_ctl,$initdb) = get_test_settings(); ## no critic (Variables::ProhibitUnusedVarsStricter)
 
     if (-e $testdir and -e "$testdir/data/postmaster.pid") {
-        my $COM = qq{$pg_ctl -D $testdir/data -m fast stop};
+        my $COM = $su ?
+            build_command('su TESTUSER -m -c "PGCTL stop -D DATADIR --mode fast"',
+                          [$su, $pg_ctl, "$testdir/data" ], 'backslash_spaces')
+            : build_command('PGCTL stop -D DATADIR --mode fast',
+                            [$pg_ctl, "$testdir/data" ]);
         my $olddir = getcwd;
-        if ($su) {
-            $COM = qq{su $su -m -c "$COM"};
-            chdir $testdir;
-        }
-        eval {
-            qx{$COM};
-        };
+        $su and chdir $testdir;
+        system $COM;
         $su and chdir $olddir;
     }
 

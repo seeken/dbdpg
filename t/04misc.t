@@ -1,6 +1,8 @@
 #!perl
 
 ## Various stuff that does not go elsewhere
+## Reference: https://metacpan.org/pod/Test::Output
+## Reference: https://metacpan.org/pod/File::Temp
 
 use 5.008001;
 use strict;
@@ -15,16 +17,17 @@ select(($|=1,select(STDERR),$|=1)[1]);
 
 my $dbh = connect_database();
 
+my ($fh, $filename);
+END { defined $filename and -e $filename and unlink $filename; }
+
 if (! $dbh) {
     plan skip_all => 'Connection to database failed, cannot continue testing';
 }
-plan tests => 105;
+plan tests => 117;
 
 my $superuser = is_super();
 
-isnt ($dbh, undef, 'Connect to database for miscellaneous tests');
-
-my $t = q{Method 'server_trace_flag' is available without a database handle};
+my $t = q{DBD::Pg method parse_trace_flag() works without a database handle};
 my $num;
 eval {
     $num = DBD::Pg->parse_trace_flag('NONE');
@@ -35,11 +38,11 @@ $t = q{Driver handle is obtainable directly from DBD::Pg};
 my $drh = DBD::Pg->driver;
 is (ref $drh, 'DBI::dr', $t);
 
-$t = q{Method 'private_attribute_info' is available without a database handle and returns an empty hashref};
+$t = q{Method private_attribute_info() is available without a database handle and returns an empty hashref};
 my $result = $drh->private_attribute_info();
 is_deeply ($result, {}, $t);
 
-$t = q{Internal method 'CLONE' returns undef};
+$t = q{DBD::Pg method CLONE() returns undef};
 $result = DBD::Pg->CLONE();
 is ($result, undef, $t);
 
@@ -126,34 +129,35 @@ $t = 'Constant PG_MAX_BIGSERIAL returns expected value of 9223372036854775807 (s
 $sth->execute(PG_MAX_BIGSERIAL);
 is ( $sth->fetch->[0], '9223372036854775807', $t);
 
-$t='Method "server_trace_flag" returns undef on bogus argument';
+$t='DBD::Pg method server_trace_flag() returns undef on bogus argument';
+$num = DBD::Pg->parse_trace_flag('foobar');
 is ($num, undef, $t);
 
-$t=q{Method "server_trace_flag" returns 0x00000100 for DBI value 'SQL'};
+$t=q{DBD::Pg method server_trace_flag() returns 256 (0x00000100) for DBI flag 'SQL'};
 $num = DBD::Pg->parse_trace_flag('SQL');
-is ($num, 0x00000100, $t);
+is ($num, 256, $t);
 
-$t=q{Method "server_trace_flag" returns 0x01000000 for DBD::Pg flag 'pglibpq'};
+$t=q{DBD::Pg method server_trace_flag() returns 16777216 (0x01000000) for DBD::Pg flag 'pglibpq'};
 $num = DBD::Pg->parse_trace_flag('pglibpq');
-is ($num, 0x01000000, $t);
+is ($num, 16777216, $t);
 
-$t=q{Database handle method "server_trace_flag" returns undef on bogus argument};
+$t=q{Database handle method server_trace_flag() returns undef on bogus argument};
 $num = $dbh->parse_trace_flag('NONE');
 is ($num, undef, $t);
 
-$t=q{Database handle method "server_trace_flag" returns 0x00000100 for DBI value 'SQL'};
+$t=q{Database handle method server_trace_flag() returns 256 (0x00000100) for DBI flag 'SQL'};
 $num = $dbh->parse_trace_flag('SQL');
-is ($num, 0x00000100, $t);
+is ($num, 256, $t);
 
-$t=q{Database handle method 'server_trace_flags' returns 0x01000100 for 'SQL|pglibpq'};
+$t=q{Database handle method server_trace_flags() returns 16777472 (0x01000100) for 'SQL|pglibpq'};
 $num = $dbh->parse_trace_flags('SQL|pglibpq');
-is ($num, 0x01000100, $t);
+is ($num, 16777472, $t);
 
-$t=q{Database handle method 'server_trace_flags' returns 0x03000100 for 'SQL|pglibpq|pgstart'};
+$t=q{Database handle method server_trace_flags() returns 0x03000100 for 'SQL|pglibpq|pgstart'};
 $num = $dbh->parse_trace_flags('SQL|pglibpq|pgstart');
 is ($num, 0x03000100, $t);
 
-$t = q{Method 'server_trace_flags' is available without a database handle};
+$t = q{DBD::Pg method server_trace_flags() is available without a database handle};
 $num = DBD::Pg->parse_trace_flags('SQL|pglibpq|pgstart');
 is ($num, 0x03000100, $t);
 
@@ -162,24 +166,24 @@ $sth = $dbh->prepare('SELECT 1');
 for my $flag (qw/pglibpq pgstart pgend pgprefix pglogin pgquote/) {
 
     my $hex = 2**$flagexp++;
-    $t = qq{Database handle method "server_trace_flag" returns $hex for flag $flag};
+    $t = qq{Database handle method server_trace_flag() returns correct value for flag $flag};
     $num = $dbh->parse_trace_flag($flag);
     is ($num, $hex, $t);
 
-    $t = qq{Database handle method 'server_trace_flags' returns $hex for flag $flag};
+    $t = qq{Database handle method server_trace_flags() returns correct value for flag $flag};
     $num = $dbh->parse_trace_flags($flag);
     is ($num, $hex, $t);
 
-    $t = qq{Statement handle method "server_trace_flag" returns $hex for flag $flag};
+    $t = qq{Statement handle method server_trace_flag() returns correct value for flag $flag};
     $num = $sth->parse_trace_flag($flag);
     is ($num, $hex, $t);
 
-    $t = qq{Statement handle method 'server_trace_flags' returns $hex for flag $flag};
+    $t = qq{Statement handle method server_trace_flags() returns correct value for flag $flag};
     $num = $sth->parse_trace_flag($flag);
     is ($num, $hex, $t);
 }
 
-$t = q{Database handle method "server_trace_flag" returns all-but-pgprefix for flag 'DBD'};
+$t = q{Database handle method server_trace_flag() returns all-but-pgprefix for flag 'DBD'};
 $num = $dbh->parse_trace_flag('DBD');
 is ($num, 0x7FFFFF00 - 0x08000000, $t);
 
@@ -192,7 +196,7 @@ LANGUAGE plpgsql
 AS $BC$
  DECLARE
    level ALIAS FOR $1;
- BEGIN 
+ BEGIN
   IF level ~* 'notice' THEN
     RAISE NOTICE 'RAISE NOTICE FROM dbdpg_test_error_handler';
   ELSIF level ~* 'warning' THEN
@@ -211,12 +215,13 @@ $BC$
     };
     if ($@) {
         $dbh->rollback();
-        $@ and skip ('Cannot load function  for testing', 6);
+        $@ and skip ('Cannot load function for testing', 6);
     }
 
     $sth = $dbh->prepare('SELECT * FROM dbdpg_test_error_handler( ? )');
 
-    is( $sth->err, undef, q{Statement attribute 'err' is initially undef});
+    $t='Statement handle method err() is initially undef';
+    is( $sth->err, undef, $t);
 
     $dbh->do(q{SET client_min_messages = 'ERROR'});
 
@@ -225,24 +230,20 @@ $BC$
 
         for my $level (qw/notice warning/) {
             $sth->execute($level);
-            is( $sth->err, 6, qq{Statement attribute 'err' set to 6 for level $level});
+            is( $sth->err, 6, qq{Statement handle method err() set to 6 for level $level});
         }
     }
 
-    for my $level (qw/exception/) {
-        eval { $sth->execute($level);};
-        is( $sth->err, 7, qq{Statement attribute 'err' set to 7 for level $level});
-        $dbh->rollback;
-    }
+    eval { $sth->execute('exception');};
+    is( $sth->err, 7, q{Statement handle method err() set to 7 for 'exception'});
+    $dbh->rollback;
 
-    for my $level (qw/normal/) {
-        $sth->execute($level);
-        is( $sth->err, undef, q{Statement attribute 'err' set to undef when no notices raised});
-    }
+    $sth->execute('normal');
+    is( $sth->err, undef, q{Statement handle method err() set to undef when no notices raised});
 
     $sth->finish;
 
-    is( $sth->err, undef, q{Statement attribute 'err' set to undef after statement finishes});
+    is( $sth->err, undef, q{Statement handle method err() set to undef after statement finishes});
 
     $dbh->do('DROP FUNCTION dbdpg_test_error_handler(TEXT)') or die $dbh->errstr;
     $dbh->do('SET client_min_messages = NOTICE');
@@ -250,39 +251,48 @@ $BC$
 
 }
 
+
 ## Some funkier connection attempts
 SKIP: {
 
     eval { require Test::Output; };
-    skip ('Test::Output is needed for some connection tests', 2) if $@;
+    if ($@) {
+        skip ('Test::Output is needed for some connection tests', 2);
+    }
 
-    $t=q{Connect with 'dbd_verbose' attrib sets debug output on};
+    $t=q{DBI method connect() with 'dbd_verbose' attrib sets debug output on};
     my ($testdsn,$testuser,$helpconnect,$su,$uid,$testdir,$pg_ctl,$initdb,$error,$version)
         = get_test_settings();
     $testdsn =~ s/^dbi/DBI/i;
     my $ldbh;
-    Test::Output::stderr_like( sub { $ldbh = DBI->connect($testdsn, $testuser, $ENV{DBI_PASS},
-                                                          {RaiseError => 1, dbd_verbose => 1}); $ldbh->do('select 1');
-                                 }, qr/dbd_db_STORE/, $t);
+    Test::Output::stderr_like(
+        sub {
+            $ldbh = DBI->connect
+                ($testdsn, $testuser, $ENV{DBI_PASS},
+                 {RaiseError => 1, dbd_verbose => 1});
+            $ldbh->do('select 1');
+        },
+        qr/dbd_db_STORE/, $t);
+
     ## DBI is way too sticky with tracing stuff, so we need to turn it off here
     $ldbh->trace(0);
 
-    $t=q{Connect with no attributes at all works};
+    $t=q{DBI method connect() with no attributes at all works};
     $ldbh = DBI->connect($testdsn, $testuser, $ENV{DBI_PASS});
     ok (ref $ldbh, $t);
 }
 
 SKIP: {
 
-    eval {
-        require File::Temp;
-    };
-    $@ and skip ('Must have File::Temp to complete trace flag testing', 9);
+    eval { require File::Temp; };
+    if ($@) {
+        skip ('Must have File::Temp to test trace flags', 8);
+    }
 
-    my ($fh,$filename) = File::Temp::tempfile('dbdpg_test_XXXXXX', SUFFIX => '.tst', UNLINK => 1);
+   ($fh,$filename) = File::Temp::tempfile('dbdpg_test_XXXXXX', SUFFIX => '.tst', UNLINK => 0);
     my ($flag, $info, $expected, $SQL);
 
-    $t=q{Trace flag 'SQL' works as expected};
+    $t=q{Database handle method trace() works as expected with 'SQL' setting};
     $flag = $dbh->parse_trace_flags('SQL');
     $dbh->trace($flag, $filename);
     $SQL = q{SELECT 'dbdpg_flag_testing'};
@@ -294,7 +304,7 @@ SKIP: {
     $expected = qq{begin;\n\n$SQL;\n\ncommit;\n\n};
     is ($info, $expected, $t);
 
-    $t=q{Trace flag 'pglibpq' works as expected};
+    $t=q{Database handle method trace() works as expected with 'pglibpq' setting};
     seek $fh, 0, 0;
     truncate $fh, tell($fh);
     $dbh->trace($dbh->parse_trace_flag('pglibpq'), $filename);
@@ -322,7 +332,7 @@ PQresultErrorField
 
     is ($info, $expected, $t);
 
-    $t=q{Trace flag 'pgstart' works as expected};
+    $t=q{Database handle method trace() works as expected with 'pgstart' setting};
     seek $fh, 0, 0;
     truncate $fh, tell($fh);
     $dbh->trace($dbh->parse_trace_flags('pgstart'), $filename);
@@ -332,18 +342,18 @@ PQresultErrorField
     seek $fh,0,0;
     { local $/; ($info = <$fh>) =~ s/\r//go; }
     $expected = q{Begin pg_quickexec (query: SELECT 'dbdpg_flag_testing' async: 0 async_status: 0)
-Begin _result (sql: begin)
-Begin _sqlstate
-Begin _sqlstate
+Begin run_sql (sql: begin)
+Begin set_sqlstate
+Begin set_sqlstate
 Begin dbd_db_commit
 Begin pg_db_rollback_commit (action: commit AutoCommit: 0 BegunWork: 0)
 Begin PGTransactionStatusType
-Begin _result (sql: commit)
-Begin _sqlstate
+Begin run_sql (sql: commit)
+Begin set_sqlstate
 };
     is ($info, $expected, $t);
 
-    $t=q{Trace flag 'pgprefix' works as expected};
+    $t=q{Database handle method trace() works as expected with 'pgstart|pgprefix' setting};
     seek $fh, 0, 0;
     truncate $fh, tell($fh);
     $dbh->trace($dbh->parse_trace_flags('pgstart|pgprefix'), $filename);
@@ -353,18 +363,18 @@ Begin _sqlstate
     seek $fh,0,0;
     { local $/; ($info = <$fh>) =~ s/\r//go; }
     $expected = q{dbdpg: Begin pg_quickexec (query: SELECT 'dbdpg_flag_testing' async: 0 async_status: 0)
-dbdpg: Begin _result (sql: begin)
-dbdpg: Begin _sqlstate
-dbdpg: Begin _sqlstate
+dbdpg: Begin run_sql (sql: begin)
+dbdpg: Begin set_sqlstate
+dbdpg: Begin set_sqlstate
 dbdpg: Begin dbd_db_commit
 dbdpg: Begin pg_db_rollback_commit (action: commit AutoCommit: 0 BegunWork: 0)
 dbdpg: Begin PGTransactionStatusType
-dbdpg: Begin _result (sql: commit)
-dbdpg: Begin _sqlstate
+dbdpg: Begin run_sql (sql: commit)
+dbdpg: Begin set_sqlstate
 };
     is ($info, $expected, $t);
 
-    $t=q{Trace flag 'pgend' works as expected};
+    $t=q{Database handle method trace() works as expected with 'pgend' setting};
     seek $fh, 0, 0;
     truncate $fh, tell($fh);
     $dbh->trace($dbh->parse_trace_flags('pgend'), $filename);
@@ -373,17 +383,17 @@ dbdpg: Begin _sqlstate
     $dbh->trace(0);
     seek $fh,0,0;
     { local $/; ($info = <$fh>) =~ s/\r//go; }
-    $expected = q{End _sqlstate (status: 1)
-End _result
-End _sqlstate (status: 2)
+    $expected = q{End set_sqlstate (status: 1)
+End run_sql
+End set_sqlstate (status: 2)
 End pg_quickexec (rows: 1, txn_status: 2)
-End _sqlstate (status: 1)
-End _result
+End set_sqlstate (status: 1)
+End run_sql
 End pg_db_rollback_commit (result: 1)
 };
     is ($info, $expected, $t);
 
-    $t=q{Trace flag 'pglogin' returns undef if no activity};
+    $t=q{Database handle method trace() works as expected with 'pglogin' setting (no logins)};
     seek $fh, 0, 0;
     truncate $fh, tell($fh);
     $dbh->trace($dbh->parse_trace_flags('pglogin'), $filename);
@@ -395,7 +405,7 @@ End pg_db_rollback_commit (result: 1)
     $expected = undef;
     is ($info, $expected, $t);
 
-    $t=q{Trace flag 'pglogin' works as expected with DBD::Pg->parse_trace_flag()};
+    $t=q{Database handle method trace() works as expected with 'pglogin' setting};
     $dbh->disconnect();
     my $flagval = DBD::Pg->parse_trace_flag('pglogin');
     seek $fh, 0, 0;
@@ -409,30 +419,14 @@ End pg_db_rollback_commit (result: 1)
     DBI->trace(0);
     seek $fh,0,0;
     { local $/; ($info = <$fh>) =~ s/\r//go; }
-    $expected = q{Login connection string: 
+    $expected = q{Login connection string:
 Connection complete
 Disconnection complete
 };
-    $info =~ s/(Login connection string: ).+/$1/g;
+    $info =~ s/(Login connection string:).+/$1/g;
     is ($info, "$expected$expected", $t);
 
-    $t=q{Trace flag 'pglogin' works as expected with DBD::Pg->parse_trace_flag()};
-    seek $fh, 0, 0;
-    truncate $fh, tell($fh);
-    DBI->trace($flagval, $filename);
-    $dbh = connect_database({nosetup => 1});
-    $dbh->disconnect();
-    DBI->trace(0);
-    seek $fh,0,0;
-    { local $/; ($info = <$fh>) =~ s/\r//go; }
-    $expected = q{Login connection string: 
-Connection complete
-Disconnection complete
-};
-    $info =~ s/(Login connection string: ).+/$1/g;
-    is ($info, "$expected", $t);
-
-    $t=q{Trace flag 'pgprefix' and 'pgstart' appended to 'pglogin' work as expected};
+    $t=q{Database handle method trace() works as expected with 'pgprefix|pgstart' plus 'pglogin' setting};
     seek $fh, 0, 0;
     truncate $fh, tell($fh);
     DBI->trace($flagval, $filename);
@@ -445,83 +439,146 @@ Disconnection complete
     $dbh->rollback();
     seek $fh,0,0;
     { local $/; ($info = <$fh>) =~ s/\r//go; }
-    $expected = q{Login connection string: 
+    $expected = q{Login connection string:
 Connection complete
 dbdpg: Begin pg_quickexec (query: SELECT 'dbdpg_flag_testing' async: 0 async_status: 0)
-dbdpg: Begin _sqlstate
+dbdpg: Begin set_sqlstate
 };
-    $info =~ s/(Login connection string: ).+/$1/g;
+    $info =~ s/(Login connection string:).+/$1/g;
     is ($info, "$expected", $t);
 
+    $^O =~ /Win32/ and sleep 1;
+    unlink $filename;
+
 } ## end trace flag testing using File::Temp
+
 
 #
 # Test of the "data_sources" method
 #
 
-$t='The "data_sources" method returns an entry for template0 when called via $dbh';
-my @sources = $dbh->data_sources('Pg');
 my $expected = qr{\bdbi:Pg:dbname=template0\b};
-like ((join ' ' => @sources), $expected, $t);
+my $expected_port = qr{\bdbi:Pg:dbname=template0;port=1234(?:$| )};
+my $expected_hostport = qr{\bdbi:Pg:dbname=template0;host=foo;port=1234(?:$| )};
+my @sources;
+my $dsn = defined $ENV{DBI_DSN} ? $ENV{DBI_DSN} : '';
 
-$t='The "data_sources" method returns an entry for template0 when called via DBI';
+$t=q{DBI method data_sources() works when first arg is 'Pg'};
 @sources = DBI->data_sources('Pg');
 like ((join ' ' => @sources), $expected, $t);
 
-$t='The "data_sources" method returns an error when called with no arg via DBI';
-eval {
-    @sources = DBI->data_sources();
-};
-like ($@, qr/usage:/, $t);
+$t=q{DBI method data_sources() works when first arg is 'Pg' and second arg is set};
+@sources = DBI->data_sources('Pg', 'port=1234');
+like ((join ' ' => @sources), $expected_port, $t);
 
-$t='The "data_sources" method returns an entry for template0 when called with no arg via $dbh';
-eval {
-    @sources = $dbh->data_sources();
-};
+$t='DBI method data_sources() throws an error when first arg is "pg"';
+SKIP: {
+    # On case-insensitive file systems (Windows/macOS) 'pg' loads DBD::Pg
+    #  successfully, so the expected failure does not occur.
+    skip 'Case-insensitive file system: "pg" loads DBD::Pg', 1
+        if $^O =~ /Win32|msys|cygwin|darwin/i;
+
+    eval { @sources = DBI->data_sources('pg'); };
+    like ($@, qr/install_driver/, $t);
+}
+
+$t='DBI method data_sources() throws an error when DBI_DSN is invalid';
+eval { local $ENV{DBI_DSN} = 'foo'; @sources = DBI->data_sources('Pg'); };
+like ($@, qr/Could not connect/, $t);
+
+$t='DBI method data_sources() works when DBI_DSN is valid';
+{ local $ENV{DBI_DSN} .= "$dsn;sslmode=allow"; @sources = DBI->data_sources('Pg'); }
 like ((join ' ' => @sources), $expected, $t);
 
-$t='The "data_sources" method returns correct DSN when second arg is a port';
-my $port = 12345;
-@sources = DBI->data_sources('Pg',"port=$port");
-like ((join ' ' => @sources), qr{dbi:Pg:dbname=template0;port=$port}, $t);
+$t=q{DBI method data_sources() removes 'dbi:Pg:' from DBI_DSN};
+{ local $ENV{DBI_DSN} .= "$dsn;dbi:Pg:sslmode=allow"; @sources = DBI->data_sources('Pg'); }
+like ((join ' ' => @sources), $expected, $t);
 
-$t='The "data_sources" method returns correct DSN when second arg is a port and a leading semicolon';
-@sources = DBI->data_sources('Pg',";port=$port");
-like ((join ' ' => @sources), qr{dbi:Pg:dbname=template0;port=$port}, $t);
+$t=q{DBI method data_sources() removes '  DBI:PG:' from DBI_DSN};
+{ local $ENV{DBI_DSN} .= "$dsn;  DBI:PG:sslmode=allow"; @sources = DBI->data_sources('Pg'); }
+like ((join ' ' => @sources), $expected, $t);
 
+$t='DBI method data_sources() throws an error when no args';
+eval { local $ENV{DBI_DRIVER}; @sources = DBI->data_sources(); };
+like ($@, qr/usage:/, $t);
+
+$t='DBI method data_sources() throws an error when no args and DBI_DRIVER is empty';
+eval { local $ENV{DBI_DRIVER} = ''; @sources = DBI->data_sources(); };
+like ($@, qr/usage:/, $t);
+
+$t=q{DBI method data_sources() throws an error when no args and DBI_DRIVER is 'pg'};
 SKIP: {
+    # On case-insensitive file systems (Windows/macOS) 'pg' loads DBD::Pg
+    #  successfully, so the expected failure does not occur.
+    skip 'Case-insensitive file system: "pg" loads DBD::Pg', 1
+        if $^O =~ /Win32|msys|cygwin|darwin/i;
 
-    $t='The "data_sources" method handles database names with spaces';
-    my $test_db_name = 'dbdpg space test';
-
-    if (! grep { /\b$test_db_name\b/ } @sources) {
-        eval {
-            $dbh->{AutoCommit} = 1;
-            $dbh->do(qq{CREATE DATABASE "$test_db_name" TEMPLATE template0});
-        };
-        if ($@) {
-            skip (qq{Could not create database "$test_db_name": $@}, 1);
-        }
-    }
-
-    @sources = DBI->data_sources('Pg',"port=$port");
-
-    like ((join ' ' => @sources), qr{dbi:Pg:dbname="$test_db_name";port=$port}, $t);
-
-    eval {
-        $dbh->{AutoCommit} = 1;
-        $dbh->do(qq{DROP DATABASE "$test_db_name"});
-    };
-    $@ and diag "Unable to drop database $test_db_name: $@";
-
+    eval { local $ENV{DBI_DRIVER} = 'pg'; @sources = DBI->data_sources(); };
+    like ($@, qr/install_driver/, $t);
 }
+
+$t=q{DBI method data_sources() works when no args and DBI_DRIVER is 'Pg'};
+{ local $ENV{DBI_DRIVER} = 'Pg'; @sources = DBI->data_sources(); }
+like ((join ' ' => @sources), $expected, $t);
+
+$t=q{DBI method data_sources() works when first arg is empty string and DBI_DRIVER is 'Pg'};
+{ local $ENV{DBI_DRIVER} = 'Pg'; @sources = DBI->data_sources(''); }
+like ((join ' ' => @sources), $expected, $t);
+
+$t=q{DBI method data_sources() works when first arg is undef, second arg is set, and DBI_DRIVER is 'Pg'};
+{ local $ENV{DBI_DRIVER} = 'Pg'; @sources = DBI->data_sources(undef, 'port=1234'); }
+like ((join ' ' => @sources), $expected_port, $t);
+
+$t=q{DBI method data_sources() works when first arg is empty string, second arg is set, and DBI_DRIVER is 'Pg'};
+{ local $ENV{DBI_DRIVER} = 'Pg'; @sources = DBI->data_sources('', 'port=1234'); }
+like ((join ' ' => @sources), $expected_port, $t);
+
+$t=q{DBI method data_sources() handles leading semicolon from second arg};
+@sources = DBI->data_sources('Pg', ';port=1234');
+like ((join ' ' => @sources), $expected_port, $t);
+
+$t=q{DBI method data_sources() works when second arg is a single item hashref};
+@sources = DBI->data_sources('Pg', {port => 1234});
+like ((join ' ' => @sources), $expected_port, $t);
+
+$t=q{DBI method data_sources() works when second arg is a multi item hashref};
+@sources = DBI->data_sources('Pg', {host => 'foo', port => 1234});
+like ((join ' ' => @sources), $expected_hostport, $t);
+
+$t=q{DBI method data_sources() works when second arg is an empty hashref};
+@sources = DBI->data_sources('Pg', {});
+like ((join ' ' => @sources), $expected, $t);
+
+$t=q{DBI method data_sources() throws an error when second arg is an arrayref};
+eval { @sources = DBI->data_sources('Pg', ['port', 1234]); };
+like ($@, qr/hashref/, $t);
+
+$t=q{Database handle method data_sources() works when first arg is 'Pg'};
+@sources = $dbh->data_sources('Pg');
+like ((join ' ' => @sources), $expected, $t);
+
+$t=q{Database handle method data_sources() throws an error when more than one argument given};
+eval { @sources = $dbh->data_sources('Pg', 'port=1234'); };
+like ($@, qr/\Qhandle + 2/, $t);
+
+$t='Database handle method data_sources() works when no args';
+{ local $ENV{DBI_DRIVER}; @sources = $dbh->data_sources(); }
+like ((join ' ' => @sources), $expected, $t);
+
+$t=q{Database handle method data_sources() works when no args and DBI_DRIVER is 'pg'};
+{ local $ENV{DBI_DRIVER} = 'pg'; @sources = $dbh->data_sources(); }
+like ((join ' ' => @sources), $expected, $t);
+
+$t=q{Database handle method data_sources() works when first arg is set};
+@sources = $dbh->data_sources('port=1234');
+like ((join ' ' => @sources), $expected_port, $t);
 
 #
 # Test the use of $DBDPG_DEFAULT
 #
 
 ## Do NOT use the variable at all before the call - even in a string (test for RT #112309)
-$t=q{Using $DBDPG_DEFAULT works};
+$t=q{Statement handle method do() works with $DBDPG_DEFAULT};
 $sth = $dbh->prepare(q{INSERT INTO dbd_pg_test (id, pname) VALUES (?,?)});
 eval {
     $sth->execute(600,$DBDPG_DEFAULT);
@@ -533,26 +590,24 @@ $sth->execute(602,123);
 # Test transaction status changes
 #
 
-$t='Raw ROLLBACK via do() resets the transaction status correctly';
+
+$t='Calling ROLLBACK via do() resets the transaction status correctly';
 $dbh->{AutoCommit} = 1;
 $dbh->begin_work();
 $dbh->do('SELECT 123');
 eval { $dbh->do('ROLLBACK'); };
 is ($@, q{}, $t);
-eval { $dbh->begin_work(); };
-is ($@, q{}, $t);
+$dbh->begin_work();
 
 $t='Using dbh->commit() resets the transaction status correctly';
 eval { $dbh->commit(); };
 is ($@, q{}, $t);
-eval { $dbh->begin_work(); };
-is ($@, q{}, $t);
+$dbh->begin_work();
 
-$t='Raw COMMIT via do() resets the transaction status correctly';
+$t='Calling COMMIT via do() resets the transaction status correctly';
 eval { $dbh->do('COMMIT'); };
 is ($@, q{}, $t);
-eval { $dbh->begin_work(); };
-is ($@, q{}, $t);
+$dbh->begin_work();
 
 $t='Calling COMMIT via prepare/execute resets the transaction status correctly';
 $sth = $dbh->prepare('COMMIT');
@@ -570,11 +625,12 @@ for my $length (0..16384) {
     last;
 }
 
+$t='Calling pg_st_split_statement works for various lengths';
 if (defined $problem) {
-    fail ("pg_st_split_statment failed: $problem");
+    fail ("pg_st_split_statement failed: $problem");
 }
 else {
-    pass ('pg_st_split_statement gave no problems with various lengths');
+    pass ($t);
 }
 
 my $newdepth = $^O =~ /win/i ? 3000 : 7600;
@@ -582,7 +638,7 @@ $superuser and $dbh->do("set max_stack_depth = $newdepth");
 ## Check for problems with insane number of placeholders
 for my $ph (1..13) {
     my $total = 2**$ph;
-    $t = "prepare/execute works with $total placeholders";
+    $t = "Database handle methods prepare() and execute() work with $total placeholders";
     my $sql = 'SELECT count(*) FROM pg_class WHERE relpages IN (' . ('?,' x $total);
     $sql =~ s/.$/\)/;
     $sth = $dbh->prepare($sql);
@@ -608,7 +664,7 @@ $sth->execute(2, '0301');
 my $SQL = 'SELECT char4 FROM tt';
 $result = $dbh->selectall_arrayref($SQL)->[0][0];
 
-$t = q{Using bind_param with type 1 yields a correct bpchar value};
+$t = q{Statement handle method bind_param() with type 1 yields a correct bpchar value};
 is( $result, '0301', $t);
 
 $dbh->{AutoCommit} = 1;
@@ -621,7 +677,5 @@ $dbh->{AutoCommit} = 0;
 is ($clone->{AutoCommit}, 1, $t);
 
 
-
 cleanup_database($dbh,'test');
 $dbh->disconnect();
-
