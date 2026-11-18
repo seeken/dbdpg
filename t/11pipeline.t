@@ -782,11 +782,11 @@ $dbh->pg_getresult();  # NULL
 $dbh->pg_getresult();  # SYNC
 $dbh->pg_exit_pipeline_mode();
 
-# $1 present skips conversion entirely
+# Dollar placeholders pass through unchanged
 
 $dbh->pg_enter_pipeline_mode();
 
-$t='$1 present means no ? conversion (SQL passed through as-is)';
+$t='Dollar placeholder passes through unchanged';
 $result = $dbh->pg_send_query_params(
     'SELECT $1 AS val',
     ['works']
@@ -885,6 +885,51 @@ $dbh->pg_getresult();
 $dbh->pg_exit_pipeline_mode();
 $dbh->rollback();
 $dbh->{AutoCommit} = 1;
+# Placeholder scanning follows the normal driver's escape/settings rules.
+for my $case (
+    [q{SELECT '$1.00'::text, ?::text}, [['$1.00', 'bound']]],
+    [q{SELECT $body$BEGIN RETURN $1; END$body$::text, ?::text},
+        [['BEGIN RETURN $1; END', 'bound']]],
+    [qq{SELECT ?::text -- \$1 ?\n}, [['bound']]],
+    [q{SELECT ?::text /* $1 /* nested ? */ $2 */}, [['bound']]],
+    [q{SELECT ?::text AS "$1"}, [['bound']]],
+    [q{SELECT '{"k":1}'::jsonb \? ?}, [['t']]],
+    [q{SELECT '{"k":1}'::jsonb \?| ARRAY[?]}, [['t']]],
+    [q{SELECT '{"k":1}'::jsonb \?& ARRAY[?]}, [['t']]],
+) {
+    my ($sql, $want) = @{$case};
+    $dbh->pg_enter_pipeline_mode();
+    $dbh->pg_send_query_params($sql, [$sql =~ /jsonb/ ? 'k' : 'bound']);
+    $dbh->pg_pipeline_sync();
+    is_deeply ($dbh->pg_getresult()->{rows}, $want, "Placeholder scan: $sql");
+    $dbh->pg_getresult();
+    $dbh->pg_getresult();
+    $dbh->pg_exit_pipeline_mode();
+}
+for my $sql ('SELECT ?, $1', 'SELECT $1, ?') {
+    $dbh->pg_enter_pipeline_mode();
+    eval { $dbh->pg_send_query_params($sql, [1, 2]); };
+    like ($@, qr{Cannot mix placeholder styles}, 'Mixed placeholder styles rejected');
+    eval { $dbh->pg_send_prepare('pipeline_mixed', $sql); };
+    like ($@, qr{Cannot mix placeholder styles}, 'Mixed prepare placeholders rejected');
+    $dbh->pg_exit_pipeline_mode();
+}
+$dbh->{pg_placeholder_dollaronly} = 1;
+$dbh->pg_enter_pipeline_mode();
+$dbh->pg_send_query_params(q{SELECT '{"k":1}'::jsonb ? $1}, ['k']);
+$dbh->pg_send_prepare('pipeline_json', q{SELECT '{"k":1}'::jsonb ? $1});
+$dbh->pg_send_query_prepared('pipeline_json', ['k']);
+$dbh->pg_pipeline_sync();
+is_deeply ($dbh->pg_getresult()->{rows}, [['t']], 'Dollar only preserves JSON operator');
+$dbh->pg_getresult();
+is ($dbh->pg_getresult()->{status}, 1, 'Dollar only prepare succeeds');
+$dbh->pg_getresult();
+is_deeply ($dbh->pg_getresult()->{rows}, [['t']], 'Dollar only prepared query succeeds');
+$dbh->pg_getresult();
+$dbh->pg_getresult();
+$dbh->pg_exit_pipeline_mode();
+$dbh->{pg_placeholder_dollaronly} = 0;
+$dbh->do('DEALLOCATE pipeline_json');
 
 cleanup_database($dbh,'test');
 $dbh->disconnect;

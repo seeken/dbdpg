@@ -4701,6 +4701,12 @@ and exit pipeline mode.
 =head3 B<pg_send_query_params>
 
 Sends a parameterized query into the pipeline without waiting for results.
+Question mark placeholders are converted to C<$1>, C<$2>, etc., outside quoted
+strings, identifiers, comments and dollar-quoted bodies. Mixing question mark
+and dollar placeholders raises an error. C<pg_placeholder_dollaronly> and
+C<pg_placeholder_escaped> on the database handle have their usual meanings;
+for example C<\?>, C<\?|> and C<\?&> preserve JSON operators while removing
+the backslash. These rules also apply to C<pg_send_prepare>.
 Accepts both C<$1>, C<$2> (libpq native) and C<?> (DBI standard) placeholder
 syntax. When C<?> placeholders are detected, they are automatically converted
 to C<$1>, C<$2>, etc. Returns 1 on success, 0 on error.

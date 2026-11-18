@@ -2137,7 +2137,7 @@ static void pg_st_split_statement (pTHX_ imp_sth_t * imp_sth, char * statement)
         if ('\'' == ch || '"' == ch) {
             char quote = ch;
             STRLEN backslashes = 0;
-            bool estring = (oldch == 'E') ? DBDPG_TRUE : DBDPG_FALSE; /* E'' style string with backslash escapes */
+            bool estring = (oldch == 'E' || oldch == 'e') ? DBDPG_TRUE : DBDPG_FALSE; /* E'' style string with backslash escapes */
             if ('\'' == ch && -1 == non_standard_strings) {
                 TRACE_PQPARAMETERSTATUS;
                 const char * scs = PQparameterStatus(imp_dbh->conn,"standard_conforming_strings");
@@ -5167,8 +5167,7 @@ SV * pg_db_getresult (SV * dbh)
 /* ================================================================== */
 /* Convert ? placeholders to $N style, skipping quoted strings,       */
 /* comments, and dollar-quoted sections. Returns a new SV*.           */
-/* If the input already uses $N placeholders or has no ?, returns a   */
-/* copy of the original.                                              */
+/* Honor the database handle placeholder settings in the same pass.  */
 static SV * pg_convert_placeholders(pTHX_ SV *dbh, PGconn *conn, const char *input)
 {
     D_imp_dbh(dbh);
@@ -5176,32 +5175,12 @@ static SV * pg_convert_placeholders(pTHX_ SV *dbh, PGconn *conn, const char *inp
     const char *segment_start = input;
     unsigned char ch, oldch;
     int placeholder_num = 0;
-    bool has_question = DBDPG_FALSE;
+    bool has_dollar = DBDPG_FALSE;
     SV *output;
     signed char non_standard_strings = -1;
 
-    /* First pass: check if we need to do anything */
-    /* If there's a $<digit> anywhere, skip conversion entirely */
-    {
-        const char *scan = input;
-        while (*scan) {
-            if ('$' == *scan && scan[1] >= '1' && scan[1] <= '9') {
-                return newSVpv(input, 0);
-            }
-            if ('?' == *scan) {
-                has_question = DBDPG_TRUE;
-            }
-            scan++;
-        }
-    }
-
-    /* No ? found, return a copy unchanged */
-    if (!has_question) {
-        return newSVpv(input, 0);
-    }
-
     /* Build output with ? replaced by $N */
-    output = newSVpvs("");
+    output = sv_2mortal(newSVpvs(""));
     oldch = 1;
 
     while ((ch = (unsigned char)*ptr)) {
@@ -5244,15 +5223,21 @@ static SV * pg_convert_placeholders(pTHX_ SV *dbh, PGconn *conn, const char *inp
         if (('-' == ch && '-' == ptr[1]) ||
             ('/' == ch && '*' == ptr[1])) {
             char ctype = ptr[1]; /* '-' for line comment, '*' for block comment */
+            int depth = 1;
             ptr += 2;
             while ((ch = (unsigned char)*ptr)) {
                 ptr++;
                 if ('-' == ctype && '\n' == ch) {
                     break;
                 }
+                else if ('*' == ctype && '/' == ch && '*' == *ptr) {
+                    depth++;
+                    ptr++;
+                }
                 else if ('*' == ctype && '*' == ch && '/' == *ptr) {
                     ptr++;
-                    break;
+                    if (0 == --depth)
+                        break;
                 }
             }
             if (ch != 0) {
@@ -5260,6 +5245,17 @@ static SV * pg_convert_placeholders(pTHX_ SV *dbh, PGconn *conn, const char *inp
                 continue;
             }
             break;
+        }
+
+        /* Remove one backslash before a placeholder-like character. */
+        if ('\\' == ch && imp_dbh->ph_escaped &&
+            ('?' == ptr[1] || '$' == ptr[1] || ':' == ptr[1])) {
+            sv_catpvn(output, segment_start, ptr - segment_start);
+            ptr++;
+            sv_catpvn(output, ptr, 1);
+            oldch = *ptr++;
+            segment_start = ptr;
+            continue;
         }
 
         /* 3: Dollar quoting */
@@ -5331,8 +5327,22 @@ static SV * pg_convert_placeholders(pTHX_ SV *dbh, PGconn *conn, const char *inp
             break;
         }
 
+        /* Detect dollar placeholders only outside the sections above. */
+        if ('$' == ch && isDIGIT(ptr[1])) {
+            if ('0' == ptr[1])
+                croak("Invalid placeholder value");
+            if (placeholder_num)
+                croak("Cannot mix placeholder styles \"?\" and \"$1\"");
+            has_dollar = DBDPG_TRUE;
+            do { ptr++; } while (isDIGIT(*ptr));
+            oldch = *(ptr - 1);
+            continue;
+        }
+
         /* 4: Replace ? placeholder */
-        if ('?' == ch) {
+        if ('?' == ch && !imp_dbh->dollaronly) {
+            if (has_dollar)
+                croak("Cannot mix placeholder styles \"$1\" and \"?\"");
             /* Append everything from segment_start up to the ? */
             if (ptr > segment_start) {
                 sv_catpvn(output, segment_start, ptr - segment_start);
@@ -5389,7 +5399,6 @@ int pg_db_send_query_params (SV * dbh, char * sql, AV * params)
 
     if (!pg_pipeline_begin(aTHX_ dbh, imp_dbh)) {
         Safefree(paramValues);
-        SvREFCNT_dec(converted);
         return 0;
     }
     TRACE_PQSENDQUERYPARAMS;
@@ -5397,7 +5406,6 @@ int pg_db_send_query_params (SV * dbh, char * sql, AV * params)
                             paramValues, NULL, NULL, 0);
 
     Safefree(paramValues);
-    SvREFCNT_dec(converted);
 
     if (0 == ret) {
         fatal_sqlstate(aTHX_ imp_dbh);
@@ -5432,12 +5440,10 @@ int pg_db_send_prepare (SV * dbh, char * name, char * sql)
         const char *real_sql = SvPV_nolen(converted);
 
         if (!pg_pipeline_begin(aTHX_ dbh, imp_dbh)) {
-            SvREFCNT_dec(converted);
-            return 0;
+                return 0;
         }
         TRACE_PQSENDPREPARE;
         ret = PQsendPrepare(imp_dbh->conn, name, real_sql, 0, NULL);
-        SvREFCNT_dec(converted);
     }
     if (0 == ret) {
         fatal_sqlstate(aTHX_ imp_dbh);
