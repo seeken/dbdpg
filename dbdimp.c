@@ -469,6 +469,7 @@ int dbd_db_login6 (SV * dbh, imp_dbh_t * imp_dbh, char * dbname, char * uid, cha
     imp_dbh->copystate         = 0;
     imp_dbh->copybinary        = DBDPG_FALSE;
     imp_dbh->pipeline          = 0;
+    imp_dbh->pipeline_begin    = 0;
     imp_dbh->pg_errorlevel     = 1; /* Default */
     imp_dbh->async_status      = DBH_NO_ASYNC;
     imp_dbh->async_sth         = NULL;
@@ -4904,6 +4905,38 @@ int pg_db_flush (SV * dbh)
 } /* end of pg_db_flush */
 
 
+#ifdef DBDPG_HAS_PIPELINE
+/* Queue DBI's deferred BEGIN without adding a caller-visible result. */
+static int pg_pipeline_begin(pTHX_ SV *dbh, imp_dbh_t *imp_dbh)
+{
+    if (!imp_dbh->pipeline || imp_dbh->done_begin || DBIc_has(imp_dbh, DBIcf_AutoCommit))
+        return 1;
+
+    /* A deferred BEGIN must precede every caller-visible command. Do not
+     * hide an earlier result if AutoCommit changed in a live pipeline. */
+    TRACE_PQTRANSACTIONSTATUS;
+    if (PQTRANS_IDLE != PQtransactionStatus(imp_dbh->conn)) {
+        pg_error(aTHX_ dbh, PGRES_FATAL_ERROR,
+            "Cannot start a deferred DBI transaction in a busy pipeline; drain and exit first");
+        return 0;
+    }
+
+    TRACE_PQSENDQUERYPARAMS;
+    if (!PQsendQueryParams(imp_dbh->conn,
+            imp_dbh->txn_read_only ? "BEGIN READ ONLY" : "BEGIN",
+            0, NULL, NULL, NULL, NULL, 0)) {
+        fatal_sqlstate(aTHX_ imp_dbh);
+        TRACE_PQERRORMESSAGE;
+        pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, PQerrorMessage(imp_dbh->conn));
+        return 0;
+    }
+    imp_dbh->done_begin = DBDPG_TRUE;
+    imp_dbh->pipeline_begin = 1;
+    return 1;
+}
+#endif
+
+
 /* ================================================================== */
 int pg_db_pipeline_status (SV * dbh)
 {
@@ -4972,6 +5005,16 @@ int pg_db_exit_pipeline_mode (SV * dbh)
         return 0;
     }
     imp_dbh->pipeline = 0;
+    imp_dbh->pipeline_begin = 0;
+    TRACE_PQTRANSACTIONSTATUS;
+    {
+        PGTransactionStatusType txn = PQtransactionStatus(imp_dbh->conn);
+        imp_dbh->done_begin = (PQTRANS_INTRANS == txn || PQTRANS_INERROR == txn);
+        if (PQTRANS_IDLE == txn && DBIc_has(imp_dbh, DBIcf_BegunWork)) {
+            DBIc_set(imp_dbh, DBIcf_AutoCommit, 1);
+            DBIc_set(imp_dbh, DBIcf_BegunWork, 0);
+        }
+    }
     if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_exit_pipeline_mode (1)\n", THEADER_slow);
     return 1;
 #else
@@ -5023,6 +5066,37 @@ SV * pg_db_getresult (SV * dbh)
     const char * cmdtuples;
 
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_getresult\n", THEADER_slow);
+
+    /* Hide the deferred BEGIN and its NULL separator, including on error.
+     * Report a failed internal command through the normal DBI error path. */
+    while (imp_dbh->pipeline_begin) {
+        TRACE_PQGETRESULT;
+        result = PQgetResult(imp_dbh->conn);
+        if (2 == imp_dbh->pipeline_begin) {
+            imp_dbh->pipeline_begin = 0;
+            if (NULL == result)
+                break;
+            TRACE_PQCLEAR;
+            PQclear(result);
+            croak("Missing separator after pipeline BEGIN");
+        }
+        if (NULL == result)
+            return &PL_sv_undef;
+        imp_dbh->pipeline_begin = 2;
+        status = set_sqlstate(aTHX_ imp_dbh, result);
+        if (PGRES_COMMAND_OK != status) {
+            SV *message;
+            TRACE_PQRESULTERRORMESSAGE;
+            message = sv_2mortal(newSVpv(PQresultErrorMessage(result), 0));
+            TRACE_PQCLEAR;
+            PQclear(result);
+            imp_dbh->done_begin = DBDPG_FALSE;
+            pg_error(aTHX_ dbh, status, SvPV_nolen(message));
+            return &PL_sv_undef;
+        }
+        TRACE_PQCLEAR;
+        PQclear(result);
+    }
 
     TRACE_PQGETRESULT;
     result = PQgetResult(imp_dbh->conn);
@@ -5313,6 +5387,11 @@ int pg_db_send_query_params (SV * dbh, char * sql, AV * params)
         }
     }
 
+    if (!pg_pipeline_begin(aTHX_ dbh, imp_dbh)) {
+        Safefree(paramValues);
+        SvREFCNT_dec(converted);
+        return 0;
+    }
     TRACE_PQSENDQUERYPARAMS;
     ret = PQsendQueryParams(imp_dbh->conn, real_sql, nparams, NULL,
                             paramValues, NULL, NULL, 0);
@@ -5352,6 +5431,10 @@ int pg_db_send_prepare (SV * dbh, char * name, char * sql)
         SV *converted = pg_convert_placeholders(aTHX_ dbh, imp_dbh->conn, sql);
         const char *real_sql = SvPV_nolen(converted);
 
+        if (!pg_pipeline_begin(aTHX_ dbh, imp_dbh)) {
+            SvREFCNT_dec(converted);
+            return 0;
+        }
         TRACE_PQSENDPREPARE;
         ret = PQsendPrepare(imp_dbh->conn, name, real_sql, 0, NULL);
         SvREFCNT_dec(converted);
@@ -5397,6 +5480,10 @@ int pg_db_send_query_prepared (SV * dbh, char * name, AV * params)
         }
     }
 
+    if (!pg_pipeline_begin(aTHX_ dbh, imp_dbh)) {
+        Safefree(paramValues);
+        return 0;
+    }
     TRACE_PQSENDQUERYPREPARED;
     ret = PQsendQueryPrepared(imp_dbh->conn, name, nparams,
                               paramValues, NULL, NULL, 0);

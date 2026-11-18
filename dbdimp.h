@@ -22,6 +22,7 @@ struct imp_dbh_st {
     int     prepare_number;    /* internal prepared statement name modifier */
     int     copystate;         /* 0=none PGRES_COPY_IN PGRES_COPY_OUT */
     bool    copybinary;        /* whether the copy is in binary format */
+    int     pipeline_begin;    /* hidden deferred BEGIN result, then separator */
     int     pipeline;          /* 0=off, tracks PQpipelineStatus */
     bool    copy_nonblocking;  /* whether PQsetnonblocking was enabled for async COPY */
     int     pg_errorlevel;     /* PQsetErrorVerbosity. Set by user, defaults to 1 */

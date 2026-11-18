@@ -4688,6 +4688,16 @@ Example:
 
   $dbh->pg_exit_pipeline_mode();
 
+With C<AutoCommit> off (including after C<begin_work>), the first send queues
+DBD::Pg's deferred C<BEGIN>, using C<BEGIN READ ONLY> when C<ReadOnly> is set.
+Its result and separator are consumed internally; callers see only the results
+of their own sends. A failed internal C<BEGIN> raises a normal DBI error.
+After draining and exiting pipeline mode, use DBI C<commit> or C<rollback>.
+Use C<AutoCommit> on when sending transaction control SQL explicitly.
+Set transaction attributes before entering pipeline mode. Starting a deferred
+DBI transaction after other commands have been queued is rejected; first drain
+and exit pipeline mode.
+
 =head3 B<pg_send_query_params>
 
 Sends a parameterized query into the pipeline without waiting for results.

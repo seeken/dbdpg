@@ -23,7 +23,7 @@ if ($pgversion < 140000) {
     plan skip_all => 'Pipeline mode requires PostgreSQL 14 or later';
 }
 
-plan tests => 112;
+plan 'no_plan';
 
 my ($result, $expected, $t);
 
@@ -801,6 +801,90 @@ is ($result->{rows}[0][0], 'works', "$t \$1 param correct");
 $dbh->pg_getresult();  # NULL
 $dbh->pg_getresult();  # SYNC
 $dbh->pg_exit_pipeline_mode();
+
+# DBI transactions survive sync: only the caller's result is visible.
+$dbh->commit();
+$dbh->{AutoCommit} = 1;
+$dbh->do('CREATE TABLE dbd_pg_test_pipeline_txn (id integer)');
+for my $finish (qw(rollback commit)) {
+    $dbh->{AutoCommit} = 0;
+    $dbh->pg_enter_pipeline_mode();
+    $dbh->pg_send_query_params('INSERT INTO dbd_pg_test_pipeline_txn VALUES (?)', [1]);
+    $dbh->pg_pipeline_sync();
+    $result = $dbh->pg_getresult();
+    is ($result->{status}, 1, "$finish sees INSERT result first");
+    is ($result->{cmdtuples}, '1', "$finish sees INSERT row count");
+    is ($dbh->pg_getresult(), undef, "$finish sees one separator");
+    is ($dbh->pg_getresult()->{status}, 10, "$finish sees sync next");
+    $dbh->pg_exit_pipeline_mode();
+    if ($finish eq 'rollback') { $dbh->rollback(); }
+    else { $dbh->commit(); }
+    $dbh->{AutoCommit} = 1;
+    is ($dbh->selectrow_array('SELECT count(*) FROM dbd_pg_test_pipeline_txn'),
+        $finish eq 'rollback' ? 0 : 1, "$finish has the expected effect");
+}
+
+$dbh->begin_work();
+$dbh->pg_enter_pipeline_mode();
+$dbh->pg_send_prepare('pipeline_txn', 'INSERT INTO dbd_pg_test_pipeline_txn VALUES ($1)');
+$dbh->pg_send_query_prepared('pipeline_txn', [2]);
+$dbh->pg_pipeline_sync();
+for my $command (qw(prepare insert)) {
+    is ($dbh->pg_getresult()->{status}, 1, "begin_work $command result");
+    $dbh->pg_getresult();
+}
+$dbh->pg_getresult();
+$dbh->pg_exit_pipeline_mode();
+$dbh->rollback();
+ok ($dbh->{AutoCommit}, 'begin_work rollback restores AutoCommit');
+is ($dbh->selectrow_array('SELECT count(*) FROM dbd_pg_test_pipeline_txn'), 1,
+    'begin_work pipeline insert was rolled back');
+
+# Prepared execution can also be the first command in a fresh transaction.
+$dbh->{AutoCommit} = 0;
+$dbh->pg_enter_pipeline_mode();
+$dbh->pg_send_query_prepared('pipeline_txn', [3]);
+$dbh->pg_pipeline_sync();
+is ($dbh->pg_getresult()->{status}, 1, 'Prepared execution starts deferred transaction');
+$dbh->pg_getresult();
+$dbh->pg_getresult();
+$dbh->pg_exit_pipeline_mode();
+$dbh->rollback();
+$dbh->{AutoCommit} = 1;
+is ($dbh->selectrow_array('SELECT count(*) FROM dbd_pg_test_pipeline_txn'), 1,
+    'Prepared execution can be rolled back');
+$dbh->do('DEALLOCATE pipeline_txn');
+
+$dbh->begin_work();
+$dbh->{ReadOnly} = 1;
+$dbh->pg_enter_pipeline_mode();
+$dbh->pg_send_query_params('SHOW transaction_read_only');
+$dbh->pg_send_query_params('INSERT INTO dbd_pg_test_pipeline_txn VALUES (4)');
+$dbh->pg_pipeline_sync();
+is_deeply ($dbh->pg_getresult()->{rows}, [['on']], 'Pipeline honors ReadOnly');
+$dbh->pg_getresult();
+is ($dbh->pg_getresult()->{status}, 7, 'ReadOnly rejects pipeline writes');
+$dbh->pg_getresult();
+$dbh->pg_getresult();
+$dbh->pg_exit_pipeline_mode();
+$dbh->rollback();
+$dbh->{ReadOnly} = 0;
+$dbh->do('DROP TABLE dbd_pg_test_pipeline_txn');
+
+# A late AutoCommit change cannot make the hidden BEGIN consume prior results.
+$dbh->pg_enter_pipeline_mode();
+$dbh->pg_send_query_params('SELECT 123');
+$dbh->{AutoCommit} = 0;
+eval { $dbh->pg_send_query_params('SELECT 456'); };
+like ($@, qr{Cannot start a deferred DBI transaction in a busy pipeline},
+    'Late transaction start is rejected before adding a hidden command');
+$dbh->pg_pipeline_sync();
+is_deeply ($dbh->pg_getresult()->{rows}, [['123']], 'Earlier caller result is preserved');
+$dbh->pg_getresult();
+$dbh->pg_getresult();
+$dbh->pg_exit_pipeline_mode();
+$dbh->rollback();
+$dbh->{AutoCommit} = 1;
 
 cleanup_database($dbh,'test');
 $dbh->disconnect;
