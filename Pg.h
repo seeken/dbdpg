@@ -178,6 +178,7 @@ DBISTATE_DECLARE;
 #define TRACE_PQSENDQUERY          TRACE_XX "%sPQsendQuery\n",           THEADER_slow)
 #define TRACE_PQSENDQUERYPARAMS    TRACE_XX "%sPQsendQueryParams\n",     THEADER_slow)
 #define TRACE_PQSENDQUERYPREPARED  TRACE_XX "%sPQsendQueryPrepared\n",   THEADER_slow)
+#define TRACE_PQLIBVERSION         TRACE_XX "%sPQlibVersion\n",          THEADER_slow)
 #define TRACE_PQSERVERVERSION      TRACE_XX "%sPQserverVersion\n",       THEADER_slow)
 #define TRACE_PQSETERRORVERBOSITY  TRACE_XX "%sPQsetErrorVerbosity\n",   THEADER_slow)
 #define TRACE_PQSETNOTICEPROCESSOR TRACE_XX "%sPQsetNoticeProcessor\n",  THEADER_slow)

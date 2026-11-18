@@ -23,6 +23,15 @@ if ($pgversion < 140000) {
     plan skip_all => 'Pipeline mode requires PostgreSQL 14 or later';
 }
 
+# New headers may be paired with an older runtime library.
+eval { $dbh->pg_enter_pipeline_mode(); };
+if ($@) {
+    die $@ if $@ !~ /requires runtime libpq 14/;
+    $dbh->disconnect();
+    plan skip_all => 'Pipeline mode unavailable in runtime libpq';
+}
+$dbh->pg_exit_pipeline_mode();
+
 plan 'no_plan';
 
 my ($result, $expected, $t);

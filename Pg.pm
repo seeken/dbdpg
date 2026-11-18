@@ -4627,7 +4627,11 @@ L</pg_pipeline_sync> calls.
 
 Enters pipeline mode on the connection. The connection must be idle.
 Entering pipeline mode when already in pipeline mode is a no-op.
-Requires libpq from PostgreSQL 14 or later; croaks if compiled against
+Requires libpq from PostgreSQL 14 or later at both build and runtime;
+optional pipeline symbols are resolved from the loaded library. Older runtime
+libraries can still load DBD::Pg and use normal DBI queries. Pipeline entry
+raises an explicit runtime error when those symbols are unavailable.
+Croaks if compiled against
 an older version. Returns 1 on success, 0 on failure.
 
   $dbh->pg_enter_pipeline_mode();

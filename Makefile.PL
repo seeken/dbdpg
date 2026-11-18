@@ -303,6 +303,8 @@ my %opts =
      realclean      => { FILES => 'testdb/' },
 );
 
+$opts{LIBS}[0] .= ' -ldl' if $os eq 'linux';
+
 if ($os eq 'hpux') {
     my $osvers = $Config{osvers};
     if ($osvers < 10) {

@@ -13,6 +13,54 @@
 
 #include "Pg.h"
 
+#if defined(DBDPG_HAS_PIPELINE) || PGLIBVERSION >= 170000
+#ifdef WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+/* Resolve optional functions from the libpq already loaded by the driver. */
+static void *pg_libpq_symbol(const char *name)
+{
+#ifdef WIN32
+    HMODULE module;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)PQlibVersion, &module))
+        return NULL;
+    return (void *)GetProcAddress(module, name);
+#else
+    return dlsym(RTLD_DEFAULT, name);
+#endif
+}
+#endif
+
+#ifdef DBDPG_HAS_PIPELINE
+typedef struct {
+    PGpipelineStatus (*status)(const PGconn *);
+    int (*enter)(PGconn *);
+    int (*exit)(PGconn *);
+    int (*sync)(PGconn *);
+    int (*flush_request)(PGconn *);
+} pg_pipeline_api;
+
+/* Stack-local to avoid shared mutable state between Perl interpreters. */
+static int pg_pipeline_load(pg_pipeline_api *api)
+{
+    dTHX;
+    TRACE_PQLIBVERSION;
+    if (PQlibVersion() < 140000)
+        return 0;
+    api->status = (PGpipelineStatus (*)(const PGconn *))pg_libpq_symbol("PQpipelineStatus");
+    api->enter = (int (*)(PGconn *))pg_libpq_symbol("PQenterPipelineMode");
+    api->exit = (int (*)(PGconn *))pg_libpq_symbol("PQexitPipelineMode");
+    api->sync = (int (*)(PGconn *))pg_libpq_symbol("PQpipelineSync");
+    api->flush_request = (int (*)(PGconn *))pg_libpq_symbol("PQsendFlushRequest");
+    return api->status && api->enter && api->exit && api->sync && api->flush_request;
+}
+#endif
+
 #if defined (_WIN32) && !defined (atoll)
 #define atoll(X) _atoi64(X)
 #endif
@@ -4254,20 +4302,25 @@ static int pg_st_deallocate_statement (pTHX_ SV * sth, imp_sth_t * imp_sth)
     }
 
 #if PGLIBVERSION >= 170000
+    PGresult *(*close_prepared)(PGconn *, const char *) =
+        (PGresult *(*)(PGconn *, const char *))pg_libpq_symbol("PQclosePrepared");
+    if (close_prepared) {
 
-    if (TRACE5_slow)
-        TRC(DBILOGFP, "%sUsing PQclosePrepared: %s\n", THEADER_slow, imp_sth->prepare_name);
+        if (TRACE5_slow)
+            TRC(DBILOGFP, "%sUsing PQclosePrepared: %s\n", THEADER_slow, imp_sth->prepare_name);
 
-    CLEAR_LAST_RESULT(imp_dbh);
+        CLEAR_LAST_RESULT(imp_dbh);
 
-    CLEAR_STH_RESULT(imp_sth);
+        CLEAR_STH_RESULT(imp_sth);
 
-    TRACE_PQCLOSEPREPARED;
-    imp_dbh->last_result = imp_sth->result = PQclosePrepared(imp_dbh->conn, imp_sth->prepare_name);
-    imp_dbh->result_shared = DBDPG_TRUE;
+        TRACE_PQCLOSEPREPARED;
+        imp_dbh->last_result = imp_sth->result = close_prepared(imp_dbh->conn, imp_sth->prepare_name);
+        imp_dbh->result_shared = DBDPG_TRUE;
 
-    status = set_sqlstate(aTHX_ imp_dbh, imp_sth->result);
-#else
+        status = set_sqlstate(aTHX_ imp_dbh, imp_sth->result);
+    }
+    else
+#endif
     {
         char *                  stmt;
         New(0, stmt, strlen("DEALLOCATE ") + strlen(imp_sth->prepare_name) + 1, char); /* freed below */
@@ -4280,7 +4333,6 @@ static int pg_st_deallocate_statement (pTHX_ SV * sth, imp_sth_t * imp_sth)
         status = run_sql(aTHX_ imp_dbh, stmt);
         Safefree(stmt);
     }
-#endif
 
     if (PGRES_COMMAND_OK != status) {
         TRACE_PQERRORMESSAGE;
@@ -4953,9 +5005,12 @@ int pg_db_pipeline_status (SV * dbh)
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_pipeline_status\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
+    pg_pipeline_api api;
+    if (!pg_pipeline_load(&api))
+        return 0;
     int status;
     TRACE_PQPIPELINESTATUS;
-    status = PQpipelineStatus(imp_dbh->conn);
+    status = api.status(imp_dbh->conn);
     if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_pipeline_status (%d)\n", THEADER_slow, status);
     return status;
 #else
@@ -4975,8 +5030,11 @@ int pg_db_enter_pipeline_mode (SV * dbh)
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_enter_pipeline_mode\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
+    pg_pipeline_api api;
+    if (!pg_pipeline_load(&api))
+        croak("pg_enter_pipeline_mode requires runtime libpq 14 or later with pipeline support");
     TRACE_PQENTERPIPELINEMODE;
-    if (0 == PQenterPipelineMode(imp_dbh->conn)) {
+    if (0 == api.enter(imp_dbh->conn)) {
         fatal_sqlstate(aTHX_ imp_dbh);
         TRACE_PQERRORMESSAGE;
         pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, PQerrorMessage(imp_dbh->conn));
@@ -5003,8 +5061,11 @@ int pg_db_exit_pipeline_mode (SV * dbh)
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_exit_pipeline_mode\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
+    pg_pipeline_api api;
+    if (!pg_pipeline_load(&api))
+        croak("pg_exit_pipeline_mode requires runtime libpq 14 or later with pipeline support");
     TRACE_PQEXITPIPELINEMODE;
-    if (0 == PQexitPipelineMode(imp_dbh->conn)) {
+    if (0 == api.exit(imp_dbh->conn)) {
         fatal_sqlstate(aTHX_ imp_dbh);
         TRACE_PQERRORMESSAGE;
         pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, PQerrorMessage(imp_dbh->conn));
@@ -5044,8 +5105,11 @@ int pg_db_pipeline_sync (SV * dbh)
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_pipeline_sync\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
+    pg_pipeline_api api;
+    if (!pg_pipeline_load(&api))
+        croak("pg_pipeline_sync requires runtime libpq 14 or later with pipeline support");
     TRACE_PQPIPELINESYNC;
-    if (0 == PQpipelineSync(imp_dbh->conn)) {
+    if (0 == api.sync(imp_dbh->conn)) {
         fatal_sqlstate(aTHX_ imp_dbh);
         TRACE_PQERRORMESSAGE;
         pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, PQerrorMessage(imp_dbh->conn));
@@ -5627,13 +5691,16 @@ int pg_db_send_flush_request (SV * dbh)
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_send_flush_request\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
+    pg_pipeline_api api;
+    if (!pg_pipeline_load(&api))
+        croak("pg_send_flush_request requires runtime libpq 14 or later with pipeline support");
     if (0 == imp_dbh->pipeline) {
         pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, "pg_send_flush_request requires pipeline mode");
         if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_db_send_flush_request (not in pipeline mode)\n", THEADER_slow);
         return 0;
     }
     TRACE_PQSENDFLUSHREQUEST;
-    if (0 == PQsendFlushRequest(imp_dbh->conn)) {
+    if (0 == api.flush_request(imp_dbh->conn)) {
         fatal_sqlstate(aTHX_ imp_dbh);
         TRACE_PQERRORMESSAGE;
         pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, PQerrorMessage(imp_dbh->conn));
