@@ -22,13 +22,12 @@ elsif (!eval { require Text::SpellChecker; 1 }) {
     plan skip_all => 'Could not find Text::SpellChecker'; ## nospellcheck
 }
 else {
-    plan tests => 65;
-
     opendir my $dir, 't' or die qq{Could not open directory 't': $!\n};
     @testfiles = map { "t/$_" } grep { ! /spellcheck|lint/ } grep { /^[\w\d].+\.(t|pl)$/ } readdir $dir;
     rewinddir $dir;
     @alltestfiles = map { "t/$_" } grep { /^[\w\d].+\.(t|pl)$/ } readdir $dir;
     closedir $dir or die qq{Could not closedir "$dir": $!\n};
+    plan tests => @alltestfiles + @testfiles + 17;
 }
 
 my %okword;

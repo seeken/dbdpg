@@ -5007,7 +5007,7 @@ int pg_db_flush (SV * dbh)
 
 
 #ifdef DBDPG_HAS_PIPELINE
-/* Queue DBI's deferred BEGIN without adding a caller-visible result. */
+/* Queue the deferred DBI BEGIN without adding a caller-visible result. */
 static int pg_pipeline_begin(pTHX_ SV *dbh, imp_dbh_t *imp_dbh)
 {
     if (!imp_dbh->pipeline || imp_dbh->done_begin || DBIc_has(imp_dbh, DBIcf_AutoCommit))
@@ -5043,11 +5043,11 @@ static int pg_pipeline_begin(pTHX_ SV *dbh, imp_dbh_t *imp_dbh)
 int pg_db_pipeline_status (SV * dbh)
 {
     dTHX;
-    D_imp_dbh(dbh);
 
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_pipeline_status\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
+    D_imp_dbh(dbh);
     pg_pipeline_api api;
     if (!pg_pipeline_load(&api))
         return 0;
@@ -5068,11 +5068,11 @@ int pg_db_pipeline_status (SV * dbh)
 int pg_db_enter_pipeline_mode (SV * dbh)
 {
     dTHX;
-    D_imp_dbh(dbh);
 
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_enter_pipeline_mode\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
+    D_imp_dbh(dbh);
     pg_pipeline_api api;
     if (!pg_pipeline_load(&api))
         croak("pg_enter_pipeline_mode requires runtime libpq 14 or later with pipeline support");
@@ -5099,11 +5099,11 @@ int pg_db_enter_pipeline_mode (SV * dbh)
 int pg_db_exit_pipeline_mode (SV * dbh)
 {
     dTHX;
-    D_imp_dbh(dbh);
 
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_exit_pipeline_mode\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
+    D_imp_dbh(dbh);
     pg_pipeline_api api;
     if (!pg_pipeline_load(&api))
         croak("pg_exit_pipeline_mode requires runtime libpq 14 or later with pipeline support");
@@ -5143,11 +5143,11 @@ int pg_db_exit_pipeline_mode (SV * dbh)
 int pg_db_pipeline_sync (SV * dbh)
 {
     dTHX;
-    D_imp_dbh(dbh);
 
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_pipeline_sync\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
+    D_imp_dbh(dbh);
     pg_pipeline_api api;
     if (!pg_pipeline_load(&api))
         croak("pg_pipeline_sync requires runtime libpq 14 or later with pipeline support");
@@ -5356,6 +5356,7 @@ SV * pg_db_getresult (SV * dbh)
 } /* end of pg_db_getresult */
 
 
+#ifdef DBDPG_HAS_PIPELINE
 /* ================================================================== */
 /* Convert ? placeholders to $N style, skipping quoted strings,       */
 /* comments, and dollar-quoted sections. Returns a new SV*.           */
@@ -5560,7 +5561,6 @@ static SV * pg_convert_placeholders(pTHX_ SV *dbh, PGconn *conn, const char *inp
 } /* end of pg_convert_placeholders */
 
 
-#ifdef DBDPG_HAS_PIPELINE
 /* The low-level API accepts text parameters, including bytea input syntax.
  * libpq ignores lengths for text, so reject NUL rather than silently truncate. */
 static void pg_pipeline_params(pTHX_ imp_dbh_t *imp_dbh, AV *params, int nparams,
@@ -5590,18 +5590,19 @@ static void pg_pipeline_params(pTHX_ imp_dbh_t *imp_dbh, AV *params, int nparams
         }
     }
 }
-#endif
 
+
+#endif
 
 /* ================================================================== */
 int pg_db_send_query_params (SV * dbh, SV * sql, AV * params)
 {
     dTHX;
-    D_imp_dbh(dbh);
 
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_send_query_params\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
+    D_imp_dbh(dbh);
     int nparams, ret;
     const char ** paramValues = NULL;
     int *paramLengths = NULL;
@@ -5647,12 +5648,12 @@ int pg_db_send_query_params (SV * dbh, SV * sql, AV * params)
 int pg_db_send_prepare (SV * dbh, char * name, SV * sql)
 {
     dTHX;
-    D_imp_dbh(dbh);
-    int ret;
 
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_send_prepare\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
+    D_imp_dbh(dbh);
+    int ret;
     {
         SV *converted = pg_convert_placeholders(aTHX_ dbh, imp_dbh->conn,
         SvPV_nolen(pg_rightgraded_sv(aTHX_ sql, imp_dbh->pg_utf8_flag)));
@@ -5688,11 +5689,11 @@ int pg_db_send_prepare (SV * dbh, char * name, SV * sql)
 int pg_db_send_query_prepared (SV * dbh, char * name, AV * params)
 {
     dTHX;
-    D_imp_dbh(dbh);
 
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_send_query_prepared\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
+    D_imp_dbh(dbh);
     int nparams, ret;
     const char ** paramValues = NULL;
     int *paramLengths = NULL;
@@ -5729,11 +5730,11 @@ int pg_db_send_query_prepared (SV * dbh, char * name, AV * params)
 int pg_db_send_flush_request (SV * dbh)
 {
     dTHX;
-    D_imp_dbh(dbh);
 
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_db_send_flush_request\n", THEADER_slow);
 
 #ifdef DBDPG_HAS_PIPELINE
+    D_imp_dbh(dbh);
     pg_pipeline_api api;
     if (!pg_pipeline_load(&api))
         croak("pg_send_flush_request requires runtime libpq 14 or later with pipeline support");

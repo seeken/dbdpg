@@ -24,8 +24,8 @@
 
 #define NEED_newSVpvn_flags
 
-/* DBI's generated DESTROY calls rollback before the driver's destroy hook.
- * Route that implicit rollback through disconnect's pipeline cleanup first. */
+/* The generated DBI DESTROY calls rollback before the driver's destroy hook.
+ * Route that implicit rollback through pipeline cleanup in disconnect first. */
 static int pg_xs_rollback(SV *dbh, imp_dbh_t *imp_dbh, CV *cv)
 {
     dTHX;

@@ -20,6 +20,7 @@ if (! $dbh) {
 my $pgversion = $dbh->{pg_lib_version};
 
 if ($pgversion < 140000) {
+    $dbh->disconnect();
     plan skip_all => 'Pipeline mode requires PostgreSQL 14 or later';
 }
 
@@ -875,8 +876,8 @@ is ($dbh->pg_getresult()->{status}, PGRES_FATAL_ERROR, 'ReadOnly rejects pipelin
 $dbh->pg_getresult();
 $dbh->pg_getresult();
 $dbh->pg_exit_pipeline_mode();
-$dbh->rollback();
 $dbh->{ReadOnly} = 0;
+$dbh->rollback();
 $dbh->do('DROP TABLE dbd_pg_test_pipeline_txn');
 
 # A late AutoCommit change cannot make the hidden BEGIN consume prior results.
@@ -1021,7 +1022,7 @@ for my $condition ('true', 'false') {
     $dbh->pg_pipeline_sync();
     $result = $dbh->pg_getresult();
     is_deeply ($result->{names}, ['id', 'label'], "Column names with condition $condition");
-    is_deeply ($result->{types}, [23, 25], "Column type OIDs with condition $condition");
+    is_deeply ($result->{types}, [23, 25], "Column type identifiers with condition $condition");
     $dbh->pg_getresult();
     $dbh->pg_getresult();
     $dbh->pg_exit_pipeline_mode();

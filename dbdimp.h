@@ -24,10 +24,10 @@ struct imp_dbh_st {
     bool    copybinary;        /* whether the copy is in binary format */
     unsigned long pipeline_sent;     /* commands queued in this pipeline */
     unsigned long pipeline_received; /* command results received */
-    unsigned long pipeline_flush;    /* last flush request's command count */
+    unsigned long pipeline_flush;    /* command count at last flush request */
     unsigned long pipeline_syncs;    /* sync results still pending */
     bool    pipeline_separator;      /* next NULL terminates a command */
-    bool    pipeline_after_sync;     /* allow one final, nonblocking undef */
+    bool    pipeline_after_sync;     /* allow one final, non-blocking undef */
     int     pipeline_begin;    /* hidden deferred BEGIN result, then separator */
     int     pipeline;          /* 0=off, tracks PQpipelineStatus */
     bool    copy_nonblocking;  /* whether PQsetnonblocking was enabled for async COPY */

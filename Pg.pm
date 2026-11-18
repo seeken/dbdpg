@@ -4619,7 +4619,7 @@ are not supported in pipeline mode. Normal DBI C<do>, C<execute>, C<ping>,
 C<commit> and C<rollback> calls raise a clear error while pipeline mode is
 active. Finish draining and exit pipeline mode before making those calls.
 On disconnect or destruction, a drained pipeline is exited before DBI's
-implicit rollback. An undrained pipeline is closed directly: it is never
+implicit rollback. A pipeline with unread results is closed directly: it is never
 synchronized merely for cleanup, since that could commit queued work.
 Destroying a DBI statement handle in pipeline mode skips its server-side
 C<DEALLOCATE>; that prepared statement remains until connection close.
@@ -4761,7 +4761,7 @@ the backslash. These rules also apply to C<pg_send_prepare>.
 SQL and parameters use the same character encoding conversion as normal DBI
 binding, without changing the caller's strings. Parameters use text format:
 for C<bytea>, supply PostgreSQL input syntax (for example C<\x610062> for
-three bytes including NUL). Embedded NUL in a parameter is rejected before
+three bytes including C<NUL>). Embedded C<NUL> in a parameter is rejected before
 sending; libpq ignores lengths for text parameters. Raw binary binding and
 binary results are not exposed by this API. The same parameter rules apply
 to C<pg_send_query_prepared>.
