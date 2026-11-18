@@ -24,6 +24,19 @@
 
 #define NEED_newSVpvn_flags
 
+/* DBI's generated DESTROY calls rollback before the driver's destroy hook.
+ * Route that implicit rollback through disconnect's pipeline cleanup first. */
+static int pg_xs_rollback(SV *dbh, imp_dbh_t *imp_dbh, CV *cv)
+{
+    dTHX;
+    GV *gv = CvGV(cv);
+    if (imp_dbh->pipeline && gv && strEQ(GvNAME(gv), "DESTROY"))
+        return dbd_db_disconnect(dbh, imp_dbh);
+    return dbd_db_rollback(dbh, imp_dbh);
+}
+#undef dbd_db_rollback
+#define dbd_db_rollback(dbh, imp_dbh) pg_xs_rollback(dbh, imp_dbh, cv)
+
 MODULE = DBD::Pg    PACKAGE = DBD::Pg
 
 

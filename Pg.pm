@@ -4615,7 +4615,14 @@ point. This can dramatically reduce latency for workloads that issue many
 independent queries.
 
 Pipeline mode uses the extended query protocol exclusively. COPY operations
-are not supported in pipeline mode.
+are not supported in pipeline mode. Normal DBI C<do>, C<execute>, C<ping>,
+C<commit> and C<rollback> calls raise a clear error while pipeline mode is
+active. Finish draining and exit pipeline mode before making those calls.
+On disconnect or destruction, a drained pipeline is exited before DBI's
+implicit rollback. An undrained pipeline is closed directly: it is never
+synchronized merely for cleanup, since that could commit queued work.
+Destroying a DBI statement handle in pipeline mode skips its server-side
+C<DEALLOCATE>; that prepared statement remains until connection close.
 
 B<Note:> In blocking mode (the default), very large pipelines risk deadlock
 if both the client send buffer and server result buffer fill simultaneously.

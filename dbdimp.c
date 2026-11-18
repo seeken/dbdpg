@@ -815,6 +815,11 @@ int dbd_db_ping (SV * dbh)
 
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin dbd_db_ping\n", THEADER_slow);
 
+    if (imp_dbh->pipeline) {
+        pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, "ping not allowed in pipeline mode");
+        return 0;
+    }
+
     if (NULL == imp_dbh->conn) {
         if (TEND_slow) TRC(DBILOGFP, "%sEnd dbd_db_ping (error: no connection)\n", THEADER_slow);
         return -1;
@@ -885,6 +890,11 @@ static int pg_db_rollback_commit (pTHX_ SV * dbh, imp_dbh_t * imp_dbh, int actio
                     action ? "commit" : "rollback",
                     DBIc_is(imp_dbh, DBIcf_AutoCommit) ? 1 : 0,
                     DBIc_is(imp_dbh, DBIcf_BegunWork) ? 1 : 0);
+
+    if (imp_dbh->pipeline) {
+        pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, action ? "commit not allowed in pipeline mode" : "rollback not allowed in pipeline mode");
+        return 0;
+    }
 
     /* No action if AutoCommit = on or the connection is invalid */
     if ((NULL == imp_dbh->conn) || (DBIc_has(imp_dbh, DBIcf_AutoCommit))) {
@@ -985,6 +995,24 @@ int dbd_db_disconnect (SV * dbh, imp_dbh_t * imp_dbh)
 
     DBIc_ACTIVE_off(imp_dbh);
 
+    if (NULL != imp_dbh->conn) {
+        if (imp_dbh->pipeline) {
+#ifdef DBDPG_HAS_PIPELINE
+            pg_pipeline_api api;
+            int exited = 0;
+            if (pg_pipeline_load(&api)) {
+                TRACE_PQEXITPIPELINEMODE;
+                exited = api.exit(imp_dbh->conn);
+            }
+            if (!exited) {
+                TRACE_PQFINISH;
+                PQfinish(imp_dbh->conn);
+                imp_dbh->conn = NULL;
+            }
+#endif
+            imp_dbh->pipeline = 0;
+        }
+    }
     if (NULL != imp_dbh->conn) {
         /* Attempt a rollback */
         if (0 != dbd_db_rollback(dbh, imp_dbh) && TRACE5_slow)
@@ -2636,6 +2664,11 @@ static int pg_st_prepare_statement (pTHX_ SV * sth, imp_sth_t * imp_sth)
     int            send_prepare_status;
     ExecStatusType prepare_status;
 
+    if (imp_dbh->pipeline) {
+        pg_error(aTHX_ sth, PGRES_FATAL_ERROR, "prepare not allowed in pipeline mode");
+        return 1;
+    }
+
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_st_prepare_statement\n", THEADER_slow);
 
     Safefree(imp_sth->prepare_name);
@@ -3338,6 +3371,11 @@ long pg_quickexec (SV * dbh, const char * sql, const int asyncflag)
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_quickexec (query: %s async: %d async_status: %d)\n",
             THEADER_slow, sql, asyncflag, imp_dbh->async_status);
 
+    if (imp_dbh->pipeline) {
+        pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, "do not allowed in pipeline mode");
+        return -2;
+    }
+
     if (NULL == imp_dbh->conn) {
         pg_error(aTHX_ dbh, PGRES_FATAL_ERROR, "Database handle has been disconnected");
         return -2;
@@ -3513,6 +3551,11 @@ long dbd_st_execute (SV * sth, imp_sth_t * imp_sth)
     PQExecType    pqtype;
 
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin dbd_st_execute\n", THEADER_slow);
+
+    if (imp_dbh->pipeline) {
+        pg_error(aTHX_ sth, PGRES_FATAL_ERROR, "execute not allowed in pipeline mode");
+        return -2;
+    }
 
     if (NULL == imp_dbh->conn) {
         pg_error(aTHX_ sth, PGRES_FATAL_ERROR, "Cannot call execute on a disconnected database handle");
@@ -4252,7 +4295,7 @@ static int pg_st_deallocate_statement (pTHX_ SV * sth, imp_sth_t * imp_sth)
 
     if (TSTART_slow) TRC(DBILOGFP, "%sBegin pg_st_deallocate_statement\n", THEADER_slow);
 
-    if (imp_dbh->skip_deallocate) {
+    if (imp_dbh->skip_deallocate || imp_dbh->pipeline) {
         if (TEND_slow) TRC(DBILOGFP, "%sEnd pg_st_deallocate_statement (skipped)\n", THEADER_slow);
         return 0;
     }

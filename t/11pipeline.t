@@ -1086,5 +1086,62 @@ eval { $dbh->pg_getresult(); };
 like ($@, qr{requires a pending pipeline sync or flush request}, 'Repeated empty read rejected');
 $dbh->pg_exit_pipeline_mode();
 
+# Normal DBI SQL must not interfere with a live low-level pipeline.
+my $guard_sth = $dbh->prepare('SELECT ?::integer');
+$dbh->{AutoCommit} = 0;
+$dbh->pg_enter_pipeline_mode();
+for my $method (qw(do execute ping commit rollback)) {
+    eval {
+        if ($method eq 'execute') { $guard_sth->execute(1); }
+        elsif ($method eq 'do') { $dbh->do('SELECT 1'); }
+        else { $dbh->$method(); }
+    };
+    like ($@, qr{\Q$method\E not allowed in pipeline mode}, "$method has a pipeline guard");
+}
+$dbh->pg_send_query_params('SELECT 42');
+$dbh->pg_pipeline_sync();
+is_deeply ($dbh->pg_getresult()->{rows}, [['42']], 'Guards leave pipeline usable');
+$dbh->pg_getresult();
+$dbh->pg_getresult();
+$dbh->pg_exit_pipeline_mode();
+$dbh->rollback();
+$guard_sth->execute(1);
+is ($guard_sth->fetchrow_array(), 1, 'Normal execution resumes after pipeline exit');
+$guard_sth->finish();
+undef $guard_sth;
+$dbh->{AutoCommit} = 1;
+
+# Teardown with pending results closes the socket; it cannot sync to commit.
+$dbh->do('CREATE TABLE public.dbd_pg_test_pipeline_disconnect (id integer)');
+for my $teardown (qw(disconnect destroy)) {
+    for my $pending (qw(empty queued drained)) {
+        my $other = DBI->connect($ENV{DBI_DSN}, $ENV{DBI_USER}, $ENV{DBI_PASS},
+            {AutoCommit => 0, RaiseError => 1, PrintError => 0});
+        $other->pg_enter_pipeline_mode();
+        if ($pending ne 'empty') {
+            $other->pg_send_query_params('INSERT INTO public.dbd_pg_test_pipeline_disconnect VALUES (1)');
+            $other->pg_pipeline_sync();
+            if ($pending eq 'drained') {
+                $other->pg_getresult();
+                $other->pg_getresult();
+                $other->pg_getresult();
+            }
+        }
+        my @warnings;
+        {
+            local $SIG{__WARN__} = sub { push @warnings, @_; };
+            if ($teardown eq 'disconnect') {
+                ok ($other->disconnect(), "$pending pipeline disconnect succeeds");
+            }
+            undef $other;
+        }
+        unlike (join('', @warnings), qr{not allowed|PQexec|pipeline mode},
+            "$pending pipeline $teardown avoids protocol warnings");
+        is ($dbh->selectrow_array('SELECT count(*) FROM public.dbd_pg_test_pipeline_disconnect'),
+            0, "$pending pipeline $teardown rolls back writes");
+    }
+}
+$dbh->do('DROP TABLE public.dbd_pg_test_pipeline_disconnect');
+
 cleanup_database($dbh,'test');
 $dbh->disconnect;
